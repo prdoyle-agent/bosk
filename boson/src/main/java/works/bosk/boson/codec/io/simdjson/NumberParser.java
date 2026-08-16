@@ -20,59 +20,6 @@ class NumberParser {
 	private final DoubleParser doubleParser = new DoubleParser();
 	private final FloatParser floatParser = new FloatParser();
 
-	void parseNumber(byte[] buffer, int offset, Tape tape) {
-		boolean negative = buffer[offset] == '-';
-
-		int currentIdx = negative ? offset + 1 : offset;
-
-		int digitsStartIdx = currentIdx;
-		DigitsParsingResult digitsParsingResult = parseDigits(buffer, currentIdx, 0);
-		long digits = digitsParsingResult.digits();
-		currentIdx = digitsParsingResult.currentIdx();
-		int digitCount = currentIdx - digitsStartIdx;
-		if (digitCount == 0) {
-			throw new JsonParsingException("Invalid number. Minus has to be followed by a digit.");
-		}
-		if ('0' == buffer[digitsStartIdx] && digitCount > 1) {
-			throw new JsonParsingException("Invalid number. Leading zeroes are not allowed.");
-		}
-
-		long exponent = 0;
-		boolean floatingPointNumber = false;
-		if ('.' == buffer[currentIdx]) {
-			floatingPointNumber = true;
-			currentIdx++;
-			int firstIdxAfterPeriod = currentIdx;
-			digitsParsingResult = parseDigits(buffer, currentIdx, digits);
-			digits = digitsParsingResult.digits();
-			currentIdx = digitsParsingResult.currentIdx();
-			exponent = firstIdxAfterPeriod - currentIdx;
-			if (exponent == 0) {
-				throw new JsonParsingException("Invalid number. Decimal point has to be followed by a digit.");
-			}
-			digitCount = currentIdx - digitsStartIdx;
-		}
-		if (isExponentIndicator(buffer[currentIdx])) {
-			floatingPointNumber = true;
-			currentIdx++;
-			ExponentParsingResult exponentParsingResult = exponentParser.parse(buffer, currentIdx, exponent);
-			exponent = exponentParsingResult.exponent();
-			currentIdx = exponentParsingResult.currentIdx();
-		}
-		if (!isStructuralOrWhitespace(buffer[currentIdx])) {
-			throw new JsonParsingException("Number has to be followed by a structural character or whitespace.");
-		}
-		if (floatingPointNumber) {
-			double value = doubleParser.parse(buffer, offset, negative, digitsStartIdx, digitCount, digits, exponent);
-			tape.appendDouble(value);
-		} else {
-			if (isOutOfLongRange(negative, digits, digitCount)) {
-				throw new JsonParsingException("Number value is out of long range ([" + Long.MIN_VALUE + ", " + Long.MAX_VALUE + "]).");
-			}
-			tape.appendInt64(negative ? (~digits + 1) : digits);
-		}
-	}
-
 	byte parseByte(byte[] buffer, int len, int offset) {
 		boolean negative = buffer[offset] == '-';
 
