@@ -782,7 +782,13 @@ public class SpecCompiler {
 			LOGGER.debug("generateCodePointSwitch({})", node);
 			switch (node) {
 				case TrieNode.LeafNode(String memberName, int matchedPrefix) -> {
-					_skipToEnd(memberName.length() - matchedPrefix);
+					int remaining = memberName.length() - matchedPrefix;
+					if (remaining == 0) {
+						// The whole member name has already been consumed; only the closing quote remains.
+						_consumeEndOfString();
+					} else {
+						_skipToEnd(remaining);
+					}
 					var child = fixedObjectNode.memberSpecs().get(memberName);
 					LOGGER.debug("-> leaf({})", child);
 					switch (child.valueSpec()) {
@@ -853,6 +859,12 @@ public class SpecCompiler {
 			codeBuilder.loadConstant(remainingLength);
 			lineInfo(codeBuilder, 1);
 			_callRuntime(void.class, "skipToEndOfString", int.class);
+		}
+
+		private void _consumeEndOfString() {
+			_loadRuntime();
+			lineInfo(codeBuilder, 1);
+			_callRuntime(void.class, "consumeEndOfString");
 		}
 
 		private void _skipToken(Token token) {

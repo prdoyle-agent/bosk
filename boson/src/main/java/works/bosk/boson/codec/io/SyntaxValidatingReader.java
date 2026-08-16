@@ -239,6 +239,12 @@ public final class SyntaxValidatingReader implements JsonReader {
 	}
 
 	@Override
+	public void consumeEndOfString() {
+		downstream.consumeEndOfString();
+		doStateTransition(STRING);
+	}
+
+	@Override
 	public void validateSyntax(CharSequence expectedCharacters) {
 		downstream.validateSyntax(expectedCharacters);
 	}

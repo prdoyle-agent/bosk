@@ -118,6 +118,20 @@ public class SpecCompilerTest {
 		assertEquals(expectedOneOfEach(), actual);
 	}
 
+	/**
+	 * Member names that differ only in their final character are fully consumed
+	 * by the trie's code-point switches, so there are no remaining characters to
+	 * skip and the generated code must consume the closing quote directly.
+	 */
+	@Test
+	void testFullyConsumedMemberNames() throws IOException, NoSuchMethodException, IllegalAccessException {
+		record SamePrefixDifferentLastChar(String field1, String field2) {}
+		Parser parser = compiledParser(DataType.of(SamePrefixDifferentLastChar.class));
+		var actual = (SamePrefixDifferentLastChar) parser.parse(CharArrayJsonReader.forString("""
+			{"field1": "one", "field2": "two"}"""));
+		assertEquals(new SamePrefixDifferentLastChar("one", "two"), actual);
+	}
+
 	private Parser compiledParser(DataType dataType) throws NoSuchMethodException, IllegalAccessException {
 		var typeMap = testTypeMap(dataType, new TypeMap.Settings(true, true, true, true, false));
 		return new SpecCompiler(typeMap).compile().parserFor(typeMap.get(dataType));
