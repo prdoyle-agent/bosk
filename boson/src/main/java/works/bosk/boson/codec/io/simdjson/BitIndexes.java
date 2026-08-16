@@ -1,13 +1,13 @@
 package works.bosk.boson.codec.io.simdjson;
 
-class BitIndexes {
+public class BitIndexes {
 
 	private final int[] indexes;
 
 	private int writeIdx;
 	private int readIdx;
 
-	BitIndexes(int capacity) {
+	public BitIndexes(int capacity) {
 		indexes = new int[capacity];
 	}
 
@@ -18,24 +18,9 @@ class BitIndexes {
 
 		int idx = blockIndex - 64;
 		int cnt = Long.bitCount(bits);
-		for (int i = 0; i < 8; i++) {
+		for (int i = 0; i < cnt; i++) {
 			indexes[i + writeIdx] = idx + Long.numberOfTrailingZeros(bits);
 			bits = clearLowestBit(bits);
-		}
-
-		if (cnt > 8) {
-			for (int i = 8; i < 16; i++) {
-				indexes[i + writeIdx] = idx + Long.numberOfTrailingZeros(bits);
-				bits = clearLowestBit(bits);
-			}
-			if (cnt > 16) {
-				int i = 16;
-				do {
-					indexes[i + writeIdx] = idx + Long.numberOfTrailingZeros(bits);
-					bits = clearLowestBit(bits);
-					i++;
-				} while (i < cnt);
-			}
 		}
 		writeIdx += cnt;
 	}
@@ -55,6 +40,20 @@ class BitIndexes {
 
 	int getLast() {
 		return indexes[writeIdx - 1];
+	}
+
+	/**
+	 * Random access to a structural entry, for readers that maintain their own cursor.
+	 */
+	public int get(int i) {
+		return indexes[i];
+	}
+
+	/**
+	 * The number of structural entries recorded.
+	 */
+	public int size() {
+		return writeIdx;
 	}
 
 	int advanceAndGet() {

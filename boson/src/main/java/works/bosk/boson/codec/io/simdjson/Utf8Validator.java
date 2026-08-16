@@ -16,7 +16,7 @@ import static jdk.incubator.vector.VectorShuffle.iota;
 import static works.bosk.boson.codec.io.simdjson.VectorUtils.BYTE_SPECIES;
 import static works.bosk.boson.codec.io.simdjson.VectorUtils.INT_SPECIES;
 
-class Utf8Validator {
+public class Utf8Validator {
 
 	// Leading byte not followed by a continuation byte but by another leading or ASCII byte, e.g. 11______ 0_______, 11______ 11______
 	private static final byte TOO_SHORT = 1;
@@ -50,7 +50,7 @@ class Utf8Validator {
 	private static final VectorShuffle<Integer> FOUR_BYTES_FORWARD_SHIFT = iota(INT_SPECIES, INT_SPECIES.elementSize() - 1, 1, true);
 	private static final int STEP_SIZE = BYTE_SPECIES.vectorByteSize();
 
-	static void validate(byte[] buffer, int length) {
+	public static void validate(byte[] buffer, int length) {
 		long previousIncomplete = 0;
 		long errors = 0;
 		int previousFourUtf8Bytes = 0;

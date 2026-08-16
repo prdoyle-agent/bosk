@@ -8,7 +8,7 @@ import static jdk.incubator.vector.ByteVector.SPECIES_256;
 import static jdk.incubator.vector.ByteVector.SPECIES_512;
 import static jdk.incubator.vector.VectorOperators.ULE;
 
-class StructuralIndexer {
+public class StructuralIndexer {
 
 	private static final int VECTOR_BIT_SIZE = VectorUtils.BYTE_SPECIES.vectorBitSize();
 	private static final int STEP_SIZE = 64;
@@ -34,11 +34,11 @@ class StructuralIndexer {
 	private final BitIndexes bitIndexes;
 	private final byte[] lastBlock = new byte[STEP_SIZE];
 
-	StructuralIndexer(BitIndexes bitIndexes) {
+	public StructuralIndexer(BitIndexes bitIndexes) {
 		this.bitIndexes = bitIndexes;
 	}
 
-	void index(byte[] buffer, int length) {
+	public void index(byte[] buffer, int length) {
 		bitIndexes.reset();
 		switch (VECTOR_BIT_SIZE) {
 			case 256 -> index256(buffer, length);

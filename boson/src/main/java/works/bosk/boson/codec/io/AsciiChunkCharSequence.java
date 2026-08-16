@@ -13,7 +13,8 @@ final class AsciiChunkCharSequence implements CharSequence {
 	private final int start;
 	private final int length;
 
-	private AsciiChunkCharSequence(byte[] buffer, int start, int length) {
+	AsciiChunkCharSequence(byte[] buffer, int start, int length) {
+		assert start >= 0 && length >= 0 && start + length <= buffer.length;
 		this.buffer = buffer;
 		this.start = start;
 		this.length = length;

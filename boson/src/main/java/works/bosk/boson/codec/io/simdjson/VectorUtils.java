@@ -14,8 +14,17 @@ class VectorUtils {
 		String species = System.getProperty("works.bosk.boson.codec.io.simdjson.species", "preferred");
 		switch (species) {
 			case "preferred" -> {
-				BYTE_SPECIES = ByteVector.SPECIES_PREFERRED;
-				INT_SPECIES = IntVector.SPECIES_PREFERRED;
+				VectorSpecies<Byte> preferredByteSpecies = ByteVector.SPECIES_PREFERRED;
+				if (preferredByteSpecies.vectorShape() != VectorShape.S_256_BIT && preferredByteSpecies.vectorShape() != VectorShape.S_512_BIT) {
+					// On platforms like Apple Silicon, the preferred species is only 128-bit,
+					// which the structural indexer doesn't support.
+					// The 256-bit species works everywhere, so fall back to it.
+					BYTE_SPECIES = ByteVector.SPECIES_256;
+					INT_SPECIES = IntVector.SPECIES_256;
+				} else {
+					BYTE_SPECIES = preferredByteSpecies;
+					INT_SPECIES = IntVector.SPECIES_PREFERRED;
+				}
 				assertSupportForSpecies(BYTE_SPECIES);
 				assertSupportForSpecies(INT_SPECIES);
 			}

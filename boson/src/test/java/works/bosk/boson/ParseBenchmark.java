@@ -19,6 +19,7 @@ import works.bosk.boson.TestUtils.JustScalars;
 import works.bosk.boson.TestUtils.Month;
 import works.bosk.boson.TestUtils.OneOfEach;
 import works.bosk.boson.codec.CodecBuilder;
+import works.bosk.boson.codec.JsonReader;
 import works.bosk.boson.codec.Parser;
 import works.bosk.boson.codec.io.ByteChunkJsonReader;
 import works.bosk.boson.codec.io.CharArrayJsonReader;
@@ -29,6 +30,7 @@ import works.bosk.boson.mapping.spec.JsonValueSpec;
 import works.bosk.boson.types.BoundType;
 import works.bosk.boson.types.DataType;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.openjdk.jmh.annotations.Mode.Throughput;
 import static works.bosk.boson.TestUtils.JUST_SCALARS;
@@ -42,6 +44,7 @@ import static works.bosk.boson.mapping.TypeMap.Settings.DEFAULT;
 @Measurement(iterations = 6, time = 1, timeUnit = SECONDS)
 public class ParseBenchmark {
 	private char[] json;
+	private byte[] jsonBytes;
 	private ObjectReader objectReader;
 	private ObjectReader listReader;
 	private ManualTest manualTest;
@@ -63,6 +66,7 @@ public class ParseBenchmark {
 			json = JUST_SCALARS;
 
 		}
+		jsonBytes = new String(json).getBytes(UTF_8);
 		var objectMapper = new ObjectMapper();
 		objectReader = objectMapper.readerFor(targetClass);
 		manualTest = new ManualTest();
@@ -126,6 +130,11 @@ public class ParseBenchmark {
 	@Benchmark
 	public Object compiled_default() throws IOException {
 		return compiled.parse(new CharArrayJsonReader(json));
+	}
+
+	@Benchmark
+	public Object compiled_simdjson() throws IOException {
+		return compiled.parse(JsonReader.createSimd(jsonBytes));
 	}
 
 	@Benchmark
