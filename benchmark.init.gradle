@@ -1,0 +1,17 @@
+// A Gradle init script used by the parse-benchmark workflow.
+// Registers a task on the boson subproject that writes the test runtime
+// classpath to boson/build/test-runtime-classpath.txt, so the workflow can
+// run the JMH harness without any changes to the project's own build files.
+// Run with --no-configuration-cache; init scripts do not mix well with it.
+
+gradle.afterProject { project, state ->
+	if (project.path != ':boson') {
+		return
+	}
+	project.tasks.register('printTestRuntimeClasspath') {
+		doLast {
+			def cp = project.sourceSets.test.runtimeClasspath.asPath
+			new File(project.buildDir, 'test-runtime-classpath.txt').text = cp
+		}
+	}
+}
