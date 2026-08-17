@@ -137,7 +137,7 @@ jobs:
         working-directory: boson
         run: |
           java --add-modules jdk.incubator.vector -cp "$(cat build/test-runtime-classpath.txt)" org.openjdk.jmh.Main \
-            '^works\.bosk\.boson\.ParseBenchmark\.(compiled_simdjson|compiled_default|manual|jackson|compiled_list)$' \
+            '^works\.bosk\.boson\.ParseBenchmark\.(compiled_simdjson|compiled_list_simdjson|compiled_list_memory|compiled_default|manual|jackson|compiled_list)$' \
             -f 2 -wi 4 -i 8 -r 2 -w 2 -t 1 2>&1 | tee ../benchmark-results.txt
 
       - name: Upload benchmark results
