@@ -65,6 +65,46 @@ public class Util {
 	}
 
 	/**
+	 * Parses the given JSON number text without creating an intermediate {@link String}.
+	 * The {@code CharSequence} is the reader's view over its input, so parsing it
+	 * directly avoids the allocation that {@code String.valueOf} would incur.
+	 * <p>
+	 * The floating-point variants fall back to the {@code String} forms, because the
+	 * JDK's {@code CharSequence} parsers cover integers only.
+	 */
+	public static byte parseByte(CharSequence s) {
+		int value = Integer.parseInt(s, 0, s.length(), 10);
+		if ((byte) value != value) {
+			throw new NumberFormatException("Value out of range for byte: " + s);
+		}
+		return (byte) value;
+	}
+
+	public static short parseShort(CharSequence s) {
+		int value = Integer.parseInt(s, 0, s.length(), 10);
+		if ((short) value != value) {
+			throw new NumberFormatException("Value out of range for short: " + s);
+		}
+		return (short) value;
+	}
+
+	public static int parseInt(CharSequence s) {
+		return Integer.parseInt(s, 0, s.length(), 10);
+	}
+
+	public static long parseLong(CharSequence s) {
+		return Long.parseLong(s, 0, s.length(), 10);
+	}
+
+	public static float parseFloat(CharSequence s) {
+		return Float.parseFloat(s.toString());
+	}
+
+	public static double parseDouble(CharSequence s) {
+		return Double.parseDouble(s.toString());
+	}
+
+	/**
 	 * Zero is a special case that the caller must handle separately.
 	 */
 	public static boolean isNumberLeadingChar(int b) {
