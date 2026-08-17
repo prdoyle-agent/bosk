@@ -115,6 +115,15 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v6
 
+      - name: Use the JDK that compiled the test classes
+        # setup-java leaves JAVA_HOME on the last listed version (25, for
+        # Gradle), but Bosk's toolchain compiles with 26, so the test classes
+        # are class-file version 70. The raw java/javac commands below need
+        # the 26 JDK to run them.
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_26_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_26_X64/bin" >> "$GITHUB_PATH"
+
       - name: Compile the tests and write the test runtime classpath
         run: |
           ./gradlew --no-configuration-cache --init-script benchmark.init.gradle --console=plain :boson:testClasses :boson:printTestRuntimeClasspath
