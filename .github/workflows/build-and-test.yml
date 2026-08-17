@@ -92,6 +92,52 @@ jobs:
           name: reports-${{ matrix.group }}
           path: "**/build/reports/"
 
+  # Runs the JMH ParseBenchmark on this branch's code. Kept out of the
+  # build_and_test summary job so it never blocks a merge.
+  parse-benchmark:
+    name: Parse benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write # for upload-artifact
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5.7.0
+        with:
+          distribution: temurin
+          # First version is for Bosk to use, and the second is for Gradle
+          java-version: |
+            26
+            25
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Compile the tests and write the test runtime classpath
+        run: |
+          ./gradlew --no-configuration-cache --init-script benchmark.init.gradle --console=plain :boson:testClasses :boson:printTestRuntimeClasspath
+
+      - name: Generate the 100k-record test file
+        run: |
+          javac -cp "$(cat boson/build/test-runtime-classpath.txt)" -d gen BigfileGen.java
+          java -cp "gen:$(cat boson/build/test-runtime-classpath.txt)" BigfileGen 100000
+
+      - name: Run the parse benchmark
+        working-directory: boson
+        run: |
+          java --add-modules jdk.incubator.vector -cp "$(cat build/test-runtime-classpath.txt)" org.openjdk.jmh.Main \
+            '^works\.bosk\.boson\.ParseBenchmark\.(compiled_simdjson|compiled_default|manual|jackson|compiled_list)$' \
+            -f 2 -wi 4 -i 8 -r 2 -w 2 -t 1 2>&1 | tee ../benchmark-results.txt
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: parse-benchmark-results
+          path: benchmark-results.txt
+
   # A single summary job named "Build and test" that the branch protection
   # rules require as a check. It passes only when the build and every test
   # group above passed.
