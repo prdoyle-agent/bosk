@@ -1,7 +1,9 @@
 package works.bosk.boson;
 
+import java.io.ByteArrayInputStream;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.openjdk.jmh.annotations.Benchmark;
@@ -19,6 +21,7 @@ import works.bosk.boson.TestUtils.JustScalars;
 import works.bosk.boson.TestUtils.Month;
 import works.bosk.boson.TestUtils.OneOfEach;
 import works.bosk.boson.codec.CodecBuilder;
+import works.bosk.boson.codec.JsonReader;
 import works.bosk.boson.codec.Parser;
 import works.bosk.boson.codec.io.ByteChunkJsonReader;
 import works.bosk.boson.codec.io.CharArrayJsonReader;
@@ -29,6 +32,7 @@ import works.bosk.boson.mapping.spec.JsonValueSpec;
 import works.bosk.boson.types.BoundType;
 import works.bosk.boson.types.DataType;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.openjdk.jmh.annotations.Mode.Throughput;
 import static works.bosk.boson.TestUtils.JUST_SCALARS;
@@ -42,6 +46,8 @@ import static works.bosk.boson.mapping.TypeMap.Settings.DEFAULT;
 @Measurement(iterations = 6, time = 1, timeUnit = SECONDS)
 public class ParseBenchmark {
 	private char[] json;
+	private byte[] jsonBytes;
+	private byte[] bigFileBytes;
 	private ObjectReader objectReader;
 	private ObjectReader listReader;
 	private ManualTest manualTest;
@@ -50,6 +56,11 @@ public class ParseBenchmark {
 	private Parser compiled;
 	private Parser compiledExperimental;
 	private Parser listParser;
+
+	@Setup(Level.Trial)
+	public void loadBigFile() throws IOException {
+		bigFileBytes = Files.readAllBytes(Path.of(BIG_FILE).toAbsolutePath());
+	}
 
 	@Setup(Level.Iteration) // Called once per iteration
 	public void setup() {
@@ -63,6 +74,7 @@ public class ParseBenchmark {
 			json = JUST_SCALARS;
 
 		}
+		jsonBytes = new String(json).getBytes(UTF_8);
 		var objectMapper = new ObjectMapper();
 		objectReader = objectMapper.readerFor(targetClass);
 		manualTest = new ManualTest();
@@ -129,6 +141,11 @@ public class ParseBenchmark {
 	}
 
 	@Benchmark
+	public Object compiled_simdjson() throws IOException {
+		return compiled.parse(JsonReader.createSimd(jsonBytes));
+	}
+
+	@Benchmark
 	public Object compiled_experimental() throws IOException {
 		return compiledExperimental.parse(new CharArrayJsonReader(json).withValidation());
 	}
@@ -147,6 +164,20 @@ public class ParseBenchmark {
 		try (
 			var in = new FileInputStream(file.toFile());
 		) {
+			return listParser.parse(new ByteChunkJsonReader(new OverlappedPrefetchingChunkFiller(in)));
+		}
+	}
+
+	@Benchmark
+	public Object compiled_list_simdjson() throws IOException {
+		return listParser.parse(JsonReader.createSimd(bigFileBytes));
+	}
+
+	@Benchmark
+	public Object compiled_list_memory() throws IOException {
+		// Same in-memory input as compiled_list_simdjson, so the comparison
+		// is not distorted by the disk I/O that compiled_list incurs.
+		try (var in = new ByteArrayInputStream(bigFileBytes)) {
 			return listParser.parse(new ByteChunkJsonReader(new OverlappedPrefetchingChunkFiller(in)));
 		}
 	}

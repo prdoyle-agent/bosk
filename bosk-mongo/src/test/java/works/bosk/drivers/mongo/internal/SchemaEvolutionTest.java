@@ -24,20 +24,19 @@ import works.bosk.drivers.mongo.MongoDriverSettings.DatabaseFormat;
 import works.bosk.drivers.mongo.PandoFormat;
 import works.bosk.drivers.mongo.internal.MainDriver.ManifestInfo;
 import works.bosk.drivers.mongo.internal.SchemaEvolutionTest.ConfigInjector;
+import works.bosk.drivers.mongo.internal.TestParameters.ParameterSet;
 import works.bosk.junit.InjectFields;
 import works.bosk.junit.InjectFrom;
 import works.bosk.junit.Injected;
 import works.bosk.junit.Injector;
 import works.bosk.logback.ReplayLogsOnFailure;
 import works.bosk.testing.drivers.state.TestEntity;
-import works.bosk.testing.junit.Slow;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static works.bosk.drivers.mongo.MongoDriverSettings.DatabaseFormat.SEQUOIA;
 import static works.bosk.drivers.mongo.internal.MainDriver.MANIFEST_ID;
 import static works.bosk.testing.BoskTestUtils.boskName;
 
-@Slow
 @InjectFields
 @InjectFrom(ConfigInjector.class)
 @ReplayLogsOnFailure
@@ -268,10 +267,13 @@ public class SchemaEvolutionTest {
 		final String name;
 
 		public Helper(Configuration config, int dbCounter) {
-			super(MongoDriverSettings.builder()
-				.database(SchemaEvolutionTest.class.getSimpleName() + "_" + dbCounter)
-				.preferredDatabaseFormat(config.preferredFormat())
-			);
+			// Helpers are instantiated directly rather than by JUnit, so there's
+			// no injection machinery to supply `parameters`; set it here instead.
+			this.parameters = new ParameterSet(
+				SchemaEvolutionTest.class.getSimpleName() + "_" + dbCounter,
+				MongoDriverSettings.builder()
+					.database(SchemaEvolutionTest.class.getSimpleName() + "_" + dbCounter)
+					.preferredDatabaseFormat(config.preferredFormat()));
 			this.name = config.preferredFormat().toString().toLowerCase(Locale.ROOT);
 		}
 

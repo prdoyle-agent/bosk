@@ -24,7 +24,6 @@ Subprojects starting with `bosk-` are published libraries that contain their own
 The usual Gradle commands, plus:
 
 ```bash
-./gradlew smoke          # Fast-running tests (excludes @Slow tests)
 ./gradlew spotlessApply  # Apply code formatting
 ```
 
@@ -141,13 +140,19 @@ Wrangler interfaces (e.g. `OneMemberWrangler`, `MemberWrangler`, `Gatherer`) mus
 - For multi-line commit messages, the first line (the summary) should end with a period.
 - Single-line commit messages should not end with a period.
 
+### Pull request descriptions
+
+- Write PR descriptions in plain, informal language. Say what the change is and why, and which modules it touches; don't pad them out with formal headers or restate what's obvious from the diff.
+- Don't list the commits in the description: readers can browse the commits themselves.
+- For bug fixes, describe the motivating bug and its mechanism so reviewers can see the "why", not just the "what" in the diff.
+- If you refer to other work (an issue, PR, commit, or earlier investigation), link to it instead of alluding to it by name.
+- Avoid the noun "flake" when describing a test failure. Say what failed and why; the word suggests randomness and hides the real cause.
+
 ## Test Coding Patterns
 
 - Tests use JUnit 5
 - For parameterizing test methods, use the `@InjectedTest` annotation: `bosk-junit/src/main/java/works/bosk/junit/InjectedTest.java`
 - Tests for subprojects that integrate with external technologies like databases use Testcontainers to run those technologies, not mocks
-- `@Slow` annotation marks tests excluded from `smoke` task
-  - Smoke tests should exercise a component enough to demonstrate it's not completely broken; if the tests are fast, they can do more
 - Subclasses of `DriverConformanceTest` in `bosk-testing` verify driver implementations; all drivers ought to pass these tests
   - Use `SharedDriverConformanceTest` for drivers that do replication between bosks
 - Aim for readability in test code.

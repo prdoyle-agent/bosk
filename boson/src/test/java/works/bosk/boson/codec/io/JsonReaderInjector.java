@@ -20,8 +20,21 @@ record JsonReaderInjector() implements Injector {
 			new ByteArray(),
 			new ByteChunks(),
 			new CharArray(),
+			new SimdJson(),
 			new ValidatingCharArray()
 		);
+	}
+
+	static class SimdJson implements Function<String, JsonReader> {
+		@Override
+		public JsonReader apply(String s) {
+			return JsonReader.createSimd(s.getBytes(UTF_8));
+		}
+
+		@Override
+		public String toString() {
+			return "SimdJson";
+		}
 	}
 
 	static class ByteArray implements Function<String, JsonReader> {

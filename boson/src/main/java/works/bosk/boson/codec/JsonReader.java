@@ -4,6 +4,7 @@ import java.io.InputStream;
 import works.bosk.boson.codec.io.ByteArrayChunkFiller;
 import works.bosk.boson.codec.io.ByteChunkJsonReader;
 import works.bosk.boson.codec.io.CharArrayJsonReader;
+import works.bosk.boson.codec.io.SimdJsonReader;
 import works.bosk.boson.codec.io.SynchronousChunkFiller;
 import works.bosk.boson.codec.io.SyntaxValidatingReader;
 import works.bosk.boson.codec.io.TokenValidatingReader;
@@ -30,6 +31,7 @@ import static java.lang.Character.MIN_SURROGATE;
 public sealed interface JsonReader extends AutoCloseable permits
 	ByteChunkJsonReader,
 	CharArrayJsonReader,
+	SimdJsonReader,
 	TokenValidatingReader,
 	SyntaxValidatingReader
 {
@@ -53,6 +55,14 @@ public sealed interface JsonReader extends AutoCloseable permits
 	 */
 	static JsonReader create(byte[] utf8Bytes) {
 		return new ByteChunkJsonReader(new ByteArrayChunkFiller(utf8Bytes));
+	}
+
+	/**
+	 * @return a new JsonReader that reads from the given UTF-8 byte array that contains a complete JSON document,
+	 * using the SIMD-backed {@link SimdJsonReader}.
+	 */
+	static JsonReader createSimd(byte[] utf8Bytes) {
+		return new SimdJsonReader(utf8Bytes);
 	}
 
 	/**

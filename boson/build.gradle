@@ -9,3 +9,15 @@ dependencies {
 }
 
 spotbugsMain.enabled = false // https://github.com/spotbugs/spotbugs/issues/3564
+
+// The SIMD parsing backend uses the Vector API, which is still an incubator module.
+def incubatorVectorArgs = ['--add-modules', 'jdk.incubator.vector']
+
+tasks.withType(JavaCompile).configureEach {
+	options.compilerArgs.addAll(incubatorVectorArgs)
+	options.compilerArgs << '-Xlint:-incubating' // We accept the Vector API's incubator status
+}
+
+tasks.withType(Test).configureEach {
+	jvmArgs += incubatorVectorArgs
+}

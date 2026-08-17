@@ -13,3 +13,13 @@ dependencies {
 	testImplementation project(":bosk-logback")
 	testImplementation project(":bosk-testing")
 }
+
+tasks.named('test') {
+	// maxParallelForks spreads the Mongo tests across several JVMs, each of
+	// which starts its own MongoDB and toxiproxy containers (MongoService's
+	// containers are static, hence per-JVM). We deliberately keep a single JVM:
+	// the parallel MongoDB containers overload the CI machine, which would force
+	// us to increase the deliberately short Mongo timeout, slowing down the tests
+	// for developers.
+	maxParallelForks = 1
+}

@@ -1,9 +1,12 @@
 package works.bosk.logback;
 
 import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.filter.Filter;
 import ch.qos.logback.core.read.ListAppender;
+import ch.qos.logback.core.spi.FilterReply;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
@@ -23,6 +26,7 @@ import org.slf4j.MarkerFactory;
 import works.bosk.junit.InjectFrom;
 import works.bosk.junit.InjectedTest;
 import works.bosk.junit.Injector;
+import works.bosk.junit.InjectorMethod;
 
 import static ch.qos.logback.classic.Level.DEBUG;
 import static ch.qos.logback.classic.Level.INFO;
@@ -34,9 +38,6 @@ import static works.bosk.logback.RecordingTurboFilter.Overrides;
 import static works.bosk.logback.RecordingTurboFilter.TEST_ID_KEY;
 
 @InjectFrom({
-	RecordingTurboFilterTest.BooleanInjector.class,
-	RecordingTurboFilterTest.NullableBooleanInjector.class,
-	RecordingTurboFilterTest.CapacityInjector.class,
 	RecordingTurboFilterTest.FilterLevelInjector.class,
 	RecordingTurboFilterTest.LogLevelInjector.class
 })
@@ -290,6 +291,49 @@ class RecordingTurboFilterTest {
 	}
 
 	@Test
+	void mongoDebugNotBuffered() {
+		denyMongoDebugEvents();
+		MDC.put(TEST_ID_KEY, "t1");
+		Logger logger = new LoggerContext().getLogger("com.mongodb.Driver");
+		filter.decide(null, logger, Level.DEBUG, "m", null, null);
+		RecordingTurboFilter.QueueContents qc = filter.queueContents("t1");
+		assertEquals(0, qc.events().size());
+	}
+
+	@Test
+	void otherLoggerBuffered() {
+		denyMongoDebugEvents();
+		MDC.put(TEST_ID_KEY, "t2");
+		Logger logger = new LoggerContext().getLogger("works.bosk.Some");
+		filter.decide(null, logger, Level.DEBUG, "m", null, null);
+		RecordingTurboFilter.QueueContents qc = filter.queueContents("t2");
+		assertEquals(1, qc.events().size());
+	}
+
+	private void denyMongoDebugEvents() {
+		// Deny MongoDB DEBUG/INFO events from being buffered
+		filter.setFilter(new Filter<>() {
+			@Override
+			public FilterReply decide(ILoggingEvent event) {
+				String name = event.getLoggerName();
+				if (name != null && (name.startsWith("com.mongodb") || name.startsWith("org.mongodb"))
+					&& event.getLevel().toInt() <= Level.INFO_INT) {
+					return FilterReply.DENY;
+				}
+				return FilterReply.NEUTRAL;
+			}
+
+			@Override
+			public void start() {
+			}
+
+			@Override
+			public void stop() {
+			}
+		});
+	}
+
+	@Test
 	void recordedEvent_containsMdcAndMarker() {
 		MDC.put(TEST_ID_KEY, TEST);
 		MDC.put("bosk.name", "test-instance-123");
@@ -340,40 +384,19 @@ class RecordingTurboFilterTest {
 		return org.slf4j.event.Level.valueOf(level.toString());
 	}
 
-	record BooleanInjector() implements Injector {
-		@Override
-		public boolean supports(AnnotatedElement e, Class<?> t) {
-			return t == boolean.class;
-		}
-
-		@Override
-		public List<Boolean> values() {
-			return List.of(true, false);
-		}
+	@InjectorMethod(primitive = true)
+	static Stream<Boolean> booleans() {
+		return Stream.of(true, false);
 	}
 
-	record NullableBooleanInjector() implements Injector {
-		@Override
-		public boolean supports(AnnotatedElement e, Class<?> t) {
-			return t == Boolean.class;
-		}
-
-		@Override
-		public List<Boolean> values() {
-			return Stream.of(null, true, false).toList();
-		}
+	@InjectorMethod
+	static Stream<Boolean> nullableBooleans() {
+		return Stream.of(null, true, false);
 	}
 
-	record CapacityInjector() implements Injector {
-		@Override
-		public boolean supports(AnnotatedElement e, Class<?> t) {
-			return t == Integer.class;
-		}
-
-		@Override
-		public List<Integer> values() {
-			return Stream.of(null, 1, 2, 3).toList();
-		}
+	@InjectorMethod
+	static Stream<Integer> capacities() {
+		return Stream.of(null, 1, 2, 3);
 	}
 
 	record FilterLevelInjector() implements Injector {

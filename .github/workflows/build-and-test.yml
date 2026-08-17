@@ -11,10 +11,56 @@ on:
       - main
 
 jobs:
-  build_and_test:
-
-    name: Build and test
+  # Compile every module and run all the static analysis once, so the test
+  # jobs below can reuse the results from the build cache instead of each
+  # compiling the shared modules themselves.
+  build:
+    name: Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5.7.0
+        with:
+          distribution: temurin
+          # First version is for Bosk to use, and the second is for Gradle
+          java-version: |
+            26
+            25
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: false
+
+      - name: Build
+        run: |
+          ./gradlew check -x test
+
+  test:
+
+    # Isolate the Testcontainers-heavy suites (Mongo and SQL) onto their own
+    # runner VMs. The Mongo tests use a deliberately short timeout, and running
+    # the whole check on one VM lets the SQL tests' Postgres container and the
+    # other test JVMs starve the mongod container enough to trip that timeout.
+    # The split is purely for isolation: it is not a way to speed up the build
+    # by running the groups in parallel.
+    name: "Test [${{ matrix.group }}]"
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [mongo, sql, others]
+        include:
+          - group: mongo
+            gradle: ":bosk-mongo:test"
+          - group: sql
+            gradle: ":bosk-sql:test"
+          - group: others
+            gradle: "test -x :bosk-mongo:test -x :bosk-sql:test"
     permissions:
       contents: read
       actions: write # for upload-artifact
@@ -31,21 +77,94 @@ jobs:
             25
 
       - uses: gradle/actions/setup-gradle@v6
-        with:
-          cache-read-only: false # OR: ${{ github.ref != 'refs/heads/develop' }}
+        # The default writes the cache on main and reads it everywhere else, so
+        # tests whose inputs haven't changed since main come back FROM-CACHE
+        # and are skipped instead of being run again.
 
       - name: Run Gradle Test
         run: |
-          ./gradlew --profile test --fail-fast check
-        env:
-          ORG_GRADLE_PROJECT_ossrhUsername: ${{secrets.OSSRH_USERNAME}}
-          ORG_GRADLE_PROJECT_ossrhPassword: ${{secrets.OSSRH_TOKEN}}
-          ORG_GRADLE_PROJECT_signingKey: ${{secrets.GPG_PRIVATE_KEY}}
-          ORG_GRADLE_PROJECT_signingPassword: ${{secrets.GPG_PASSWORD}}
+          ./gradlew ${{ matrix.gradle }}
 
       - name: Upload test results
         uses: actions/upload-artifact@v7
-        if: success() || failure()
+        if: failure()
         with:
-          name: reports
+          name: reports-${{ matrix.group }}
           path: "**/build/reports/"
+
+  # Runs the JMH ParseBenchmark on this branch's code. Kept out of the
+  # build_and_test summary job so it never blocks a merge.
+  parse-benchmark:
+    name: Parse benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write # for upload-artifact
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v5.7.0
+        with:
+          distribution: temurin
+          # First version is for Bosk to use, and the second is for Gradle
+          java-version: |
+            26
+            25
+
+      - uses: gradle/actions/setup-gradle@v6
+
+      - name: Use the JDK that compiled the test classes
+        # setup-java leaves JAVA_HOME on the last listed version (25, for
+        # Gradle), but Bosk's toolchain compiles with 26, so the test classes
+        # are class-file version 70. The raw java/javac commands below need
+        # the 26 JDK to run them.
+        run: |
+          echo "JAVA_HOME=$JAVA_HOME_26_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_26_X64/bin" >> "$GITHUB_PATH"
+
+      - name: Compile the tests and write the test runtime classpath
+        run: |
+          ./gradlew --no-configuration-cache --init-script benchmark.init.gradle --console=plain :boson:testClasses :boson:printTestRuntimeClasspath
+
+      - name: Generate the 100k-record test file
+        run: |
+          javac -cp "$(cat boson/build/test-runtime-classpath.txt)" -d gen BigfileGen.java
+          java -cp "gen:$(cat boson/build/test-runtime-classpath.txt)" BigfileGen 100000
+
+      - name: Run the parse benchmark
+        working-directory: boson
+        run: |
+          java --add-modules jdk.incubator.vector -cp "$(cat build/test-runtime-classpath.txt)" org.openjdk.jmh.Main \
+            '^works\.bosk\.boson\.ParseBenchmark\.(compiled_simdjson|compiled_list_simdjson|compiled_list_memory|compiled_default|manual|jackson|jackson_list|compiled_list)$' \
+            -f 2 -wi 4 -i 8 -r 2 -w 2 -t 1 2>&1 | tee ../benchmark-results.txt
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: parse-benchmark-results
+          path: benchmark-results.txt
+
+  # A single summary job named "Build and test" that the branch protection
+  # rules require as a check. It passes only when the build and every test
+  # group above passed.
+  build_and_test:
+    name: Build and test
+    needs: [build, test]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {} # This job only reads job results, so the token needs no permissions
+    steps:
+      - name: Verify that the build and all test groups passed
+        run: |
+          if [ "${{ needs.build.result }}" != "success" ]; then
+            echo "::error::The build failed (${{ needs.build.result }})"
+            exit 1
+          fi
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "::error::One or more test groups failed (${{ needs.test.result }})"
+            exit 1
+          fi
+          echo "The build and all test groups passed"

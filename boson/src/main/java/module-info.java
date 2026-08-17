@@ -12,6 +12,7 @@
  * which in turn allows Boson to generate efficient code.
  */
 module works.bosk.boson {
+	requires jdk.incubator.vector;
 	requires org.slf4j;
 	requires works.bosk.core;
 	requires static transitive org.jspecify;
