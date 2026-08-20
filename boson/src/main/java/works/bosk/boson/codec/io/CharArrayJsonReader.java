@@ -90,44 +90,62 @@ public final class CharArrayJsonReader implements JsonReader {
 		if (c == '"') {
 			return END_OF_STRING;
 		} else if (c == '\\') {
-			if (pos >= chars.length) {
-				throw new JsonSyntaxException("Unterminated escape sequence at end of input");
-			}
-			char esc = chars[pos++];
-			return switch (esc) {
-				case '"', '\\', '/' -> esc;
-				case 'b' -> '\b';
-				case 'f' -> '\f';
-				case 'n' -> '\n';
-				case 'r' -> '\r';
-				case 't' -> '\t';
-				case 'u' -> {
-					if (pos + 4 > chars.length) {
-						throw new JsonSyntaxException("Incomplete Unicode escape sequence at end of input");
-					}
-					int value = 0;
-					for (int i = 0; i < 4; i++) {
-						char b = chars[pos++];
-						value <<= 4;
-						int digit = Character.digit(b, 16);
-						if (digit == -1) {
-							throw new JsonSyntaxException("Invalid hex digit in Unicode escape: '" + b + "'");
-						} else {
-							value |= digit;
-						}
-					}
-					yield value;
-				}
-				default -> throw new JsonSyntaxException("Invalid escape: \\" + esc);
-			};
+			return decodeEscape();
 		} else if (c >= 0x20) {
 			return c;
 		} else {
-			// Because we decode backslash sequences into code points,
-			// this is the only place we can distinguish actual illegal characters
-			// from legal escape sequences.
-			throw new JsonSyntaxException("Invalid character in string: " + Integer.toHexString(c));
+			return nextStringChar_rare(c);
 		}
+	}
+
+	/**
+	 * Decodes an escape sequence into the code point it represents. Escape
+	 * sequences are rare in practice; extracted from {@link #nextStringChar} so
+	 * that method's common path stays small enough for C2 to inline. Reconsider
+	 * whether escapes are rare enough in general to deserve this treatment.
+	 */
+	private int decodeEscape() {
+		if (pos >= chars.length) {
+			throw new JsonSyntaxException("Unterminated escape sequence at end of input");
+		}
+		char esc = chars[pos++];
+		return switch (esc) {
+			case '"', '\\', '/' -> esc;
+			case 'b' -> '\b';
+			case 'f' -> '\f';
+			case 'n' -> '\n';
+			case 'r' -> '\r';
+			case 't' -> '\t';
+			case 'u' -> {
+				if (pos + 4 > chars.length) {
+					throw new JsonSyntaxException("Incomplete Unicode escape sequence at end of input");
+				}
+				int value = 0;
+				for (int i = 0; i < 4; i++) {
+					char b = chars[pos++];
+					value <<= 4;
+					int digit = Character.digit(b, 16);
+					if (digit == -1) {
+						throw new JsonSyntaxException("Invalid hex digit in Unicode escape: '" + b + "'");
+					} else {
+						value |= digit;
+					}
+				}
+				yield value;
+			}
+			default -> throw new JsonSyntaxException("Invalid escape: \\" + esc);
+		};
+	}
+
+	/**
+	 * The rare path of {@link #nextStringChar}, for an illegal character in a
+	 * string. Because escape sequences are decoded into code points by
+	 * {@link #decodeEscape}, this is the only place that can distinguish actual
+	 * illegal characters from legal escape sequences. Rare in the benchmark;
+	 * reconsider whether that holds in general. This method never returns normally.
+	 */
+	private int nextStringChar_rare(int c) {
+		throw new JsonSyntaxException("Invalid character in string: " + Integer.toHexString(c));
 	}
 
 	@Override
@@ -150,22 +168,31 @@ public final class CharArrayJsonReader implements JsonReader {
 	public String consumeString() {
 		// We can do better than the default implementation
 		int start = ++pos; // First actual character in the string's value
-		int c;
-		try {
-			while (pos <= chars.length && (c = chars[pos]) != '"') {
-				pos++;
-				if (c == '\\') {
-					// Whoops, found an escape code. Fast path doesn't work.
-					pos = start - 1; // Back up to the opening quote
-					return JsonReader.super.consumeString();
-				}
+		while (pos < chars.length) {
+			char c = chars[pos];
+			if (c == '"') {
+				String result = new String(chars, start, pos - start);
+				pos++; // Skip closing quote
+				return result;
 			}
-		} catch (ArrayIndexOutOfBoundsException e) {
-			throw new JsonSyntaxException("Unterminated string", e);
+			if (c == '\\') {
+				// Whoops, found an escape code. Fast path doesn't work.
+				return consumeString_rare(start);
+			}
+			pos++;
 		}
-		String result = new String(chars, start, pos - start);
-		pos++; // Skip closing quote
-		return result;
+		throw new JsonSyntaxException("Unterminated string");
+	}
+
+	/**
+	 * The rare path of {@link #consumeString}: the string contains an escape
+	 * sequence, so back up to the opening quote and fall back to the
+	 * character-by-character default implementation. Rare in the benchmark;
+	 * reconsider whether that holds in general.
+	 */
+	private String consumeString_rare(int start) {
+		pos = start - 1; // Back up to the opening quote
+		return JsonReader.super.consumeString();
 	}
 
 	@Override

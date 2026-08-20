@@ -17,8 +17,10 @@ import works.bosk.boson.mapping.spec.JsonValueSpec;
 import works.bosk.boson.mapping.spec.PrimitiveNumberNode;
 
 import static java.util.Objects.requireNonNull;
+import static works.bosk.boson.codec.Token.FALSE;
 import static works.bosk.boson.codec.Token.NUMBER;
 import static works.bosk.boson.codec.Token.STRING;
+import static works.bosk.boson.codec.Token.TRUE;
 import static works.bosk.boson.codec.Token.values;
 
 /**
@@ -35,17 +37,24 @@ public abstract class SharedParserRuntime {
 
 	protected final boolean parseBoolean() {
 		Token token = input.peekValueToken();
-		return switch (token) {
-			case FALSE -> {
-				input.consumeSyntax(token);
-				yield false;
-			}
-			case TRUE -> {
-				input.consumeSyntax(token);
-				yield true;
-			}
-			default -> throw new JsonContentException("Expected boolean, not " + token);
-		};
+		if (token == TRUE) {
+			input.consumeSyntax(token);
+			return true;
+		} else if (token == FALSE) {
+			input.consumeSyntax(token);
+			return false;
+		} else {
+			return parseBoolean_rare(token);
+		}
+	}
+
+	/**
+	 * The rare path of {@link #parseBoolean}, for a token that is not a boolean.
+	 * Rare in the benchmark; reconsider whether that holds in general. This
+	 * method never returns normally.
+	 */
+	private boolean parseBoolean_rare(Token token) {
+		throw new JsonContentException("Expected boolean, not " + token);
 	}
 
 	protected final Number parseBigNumber() {
@@ -85,9 +94,19 @@ public abstract class SharedParserRuntime {
 	protected final CharSequence readNumberAsCharSequence() {
 		Token token = input.peekValueToken();
 		if (token != NUMBER) {
-			parseError("Expected number, not " + token);
+			return readNumberAsCharSequence_rare(token);
 		}
 		return input.consumeNumber();
+	}
+
+	/**
+	 * The rare path of {@link #readNumberAsCharSequence}, for input that is not
+	 * a number. Rare in the benchmark; reconsider whether that holds in general.
+	 * This method never returns normally.
+	 */
+	private CharSequence readNumberAsCharSequence_rare(Token token) {
+		parseError("Expected number, not " + token);
+		throw new AssertionError("unreachable");
 	}
 
 	protected final int peekTokenOrdinal() {
