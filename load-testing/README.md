@@ -137,6 +137,20 @@ Please retry your operation or multi-document transaction.
 
 The response carries the `TransientTransactionError` label. `MainDriver` retries a transient transaction error twice immediately, then disconnects and waits; under sustained contention it gives up and surfaces `DisconnectedException`. The 10 s tails correspond to that retry and disconnect cycle.
 
+### Document size at one thread
+
+The same MongoDB instance, one thread, 3 s warmup, 10 s measurement, flush after every update:
+
+| Entities | Pando one-big-document | SEQUOIA | Grafted Pando |
+|---:|---:|---:|---:|
+| 100 | 1,182 | 1,588 | - |
+| 1,000 | 435 | 1,098 | 1,002 |
+| 10,000 | 28 | 260 | 819 |
+
+This is the document-size curve, not a MongoDB concurrency ceiling. Pando one-big-document goes from 1,182 ops/s at 100 entities to 28 at 10,000, because each update rewrites the whole state document twice inside a transaction. SEQUOIA also slows down with state size, but it performs one atomic update. Grafted Pando stays around 1,000 ops/s because it writes small entity documents.
+
+At 100 entities, even the Pando transaction path exceeds 1,000 ops/s. The 28 ops/s figure is therefore a property of the one-big-document format at 10,000 entities, not of MongoDB's general write throughput.
+
 ### Why Pando behaves differently
 
 Two things differ from SEQUOIA:
