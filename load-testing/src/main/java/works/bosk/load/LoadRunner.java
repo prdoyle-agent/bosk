@@ -1,0 +1,272 @@
+package works.bosk.load;
+
+import java.io.IOException;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.LongAdder;
+import org.HdrHistogram.Histogram;
+import works.bosk.Bosk;
+import works.bosk.BoskConfig;
+import works.bosk.BoskDriver;
+import works.bosk.DriverFactory;
+import works.bosk.exceptions.InvalidTypeException;
+import works.bosk.testing.drivers.state.TestEntity;
+
+/**
+ * Runs one {@link LoadConfig} and returns the measurements.
+ *
+ * <p>The run has two phases. During warmup the workers submit updates but their latencies are not
+ * recorded. Then the measurement phase begins, the metrics sampler starts, and the workers record
+ * submit and flush latency until the configured duration elapses. After the workers stop, the
+ * harness flushes the driver and verifies the final state against the workload's expectation.
+ */
+public final class LoadRunner {
+
+	public LoadResult run(LoadConfig config) throws InvalidTypeException, IOException, InterruptedException {
+		Instant startedAt = Instant.now();
+		String runId = RUN_ID_FORMAT.format(startedAt.atOffset(ZoneOffset.UTC))
+			+ (config.label().isEmpty() ? "" : "-" + config.label());
+		EnvironmentInfo environment = EnvironmentInfo.capture();
+
+		DisjointFieldUpdates workload = new DisjointFieldUpdates(config.entityCount(), config.threads(), config.valueBytes());
+		Bosk<TestEntity> bosk = new Bosk<>(
+			"load-" + UUID.randomUUID(),
+			TestEntity.class,
+			workload::initialRoot,
+			BoskConfig.<TestEntity>builder()
+				.driverFactory(driverFactory(config))
+				.build());
+		workload.initialize(bosk);
+		BoskDriver driver = bosk.driver();
+
+		CountDownLatch start = new CountDownLatch(1);
+		AtomicBoolean measuring = new AtomicBoolean(false);
+		AtomicBoolean stop = new AtomicBoolean(false);
+		LongAdder opsCounter = new LongAdder();
+		LongAdder errors = new LongAdder();
+		AtomicReference<Throwable> firstError = new AtomicReference<>();
+		LatencyRecorder[] submitLatencies = new LatencyRecorder[config.threads()];
+		LatencyRecorder[] flushLatencies = new LatencyRecorder[config.threads()];
+		long[] opCounts = new long[config.threads()];
+		Thread[] workers = new Thread[config.threads()];
+		for (int i = 0; i < workers.length; i++) {
+			submitLatencies[i] = new LatencyRecorder();
+			flushLatencies[i] = new LatencyRecorder();
+			int threadIndex = i;
+			workers[i] = new Thread(
+				() -> runWorker(threadIndex, workload, driver, config, start, measuring, stop, opsCounter, errors, firstError, submitLatencies[threadIndex], flushLatencies[threadIndex], opCounts),
+				"load-worker-" + i);
+			workers[i].setUncaughtExceptionHandler((_, error) -> {
+				recordError(errors, firstError, error);
+				stop.set(true);
+			});
+		}
+
+		long heapUsedBefore = JvmMetrics.heapUsed();
+		long gcCountBefore = JvmMetrics.gcCount();
+		long gcTimeBefore = JvmMetrics.gcTimeMillis();
+
+		MetricsSampler sampler = new MetricsSampler(opsCounter);
+		boolean stalled = false;
+		long measureStart = 0;
+		long measureEnd = 0;
+		try {
+			for (Thread worker : workers) {
+				worker.start();
+			}
+			start.countDown();
+			Thread.sleep(config.warmup());
+			sampler.start();
+			measuring.set(true);
+			measureStart = System.nanoTime();
+			Thread.sleep(config.duration());
+			measureEnd = System.nanoTime();
+			measuring.set(false);
+			stop.set(true);
+			sampler.stop();
+			stalled = joinWorkers(workers, config.stallTimeout());
+		} catch (InterruptedException e) {
+			stop.set(true);
+			sampler.stop();
+			for (Thread worker : workers) {
+				worker.interrupt();
+			}
+			throw e;
+		}
+
+		long heapUsedAfter = JvmMetrics.heapUsed();
+		long gcCountAfter = JvmMetrics.gcCount();
+		long gcTimeAfter = JvmMetrics.gcTimeMillis();
+
+		boolean verified = false;
+		String verificationMessage = null;
+		if (!stalled) {
+			try {
+				driver.flush();
+				workload.verify(bosk);
+				verified = true;
+			} catch (IOException | InterruptedException | RuntimeException | AssertionError e) {
+				verificationMessage = e.toString();
+				if (e instanceof InterruptedException) {
+					Thread.currentThread().interrupt();
+				}
+			}
+		}
+
+		long ops = 0;
+		for (long opCount : opCounts) {
+			ops += opCount;
+		}
+		long measuredNanos = Math.max(0, measureEnd - measureStart);
+
+		return new LoadResult(
+			runId,
+			startedAt,
+			config,
+			environment,
+			measuredNanos,
+			ops,
+			errors.sum(),
+			mergeLatencies(submitLatencies),
+			mergeLatencies(flushLatencies),
+			verified,
+			verificationMessage,
+			stalled,
+			firstError.get(),
+			heapUsedBefore,
+			heapUsedAfter,
+			gcCountBefore,
+			gcCountAfter,
+			gcTimeBefore,
+			gcTimeAfter,
+			sampler.samples()
+		);
+	}
+
+	private static void runWorker(
+		int threadIndex,
+		Workload workload,
+		BoskDriver driver,
+		LoadConfig config,
+		CountDownLatch start,
+		AtomicBoolean measuring,
+		AtomicBoolean stop,
+		LongAdder opsCounter,
+		LongAdder errors,
+		AtomicReference<Throwable> firstError,
+		LatencyRecorder submitLatency,
+		LatencyRecorder flushLatency,
+		long[] opCounts
+	) {
+		try {
+			start.await();
+			long iteration = 0;
+			while (!stop.get()) {
+				boolean record = measuring.get();
+				long operationStart = System.nanoTime();
+				try {
+					workload.submit(driver, threadIndex, iteration++);
+				} catch (RuntimeException e) {
+					recordError(errors, firstError, e);
+					continue;
+				}
+				long operationEnd = System.nanoTime();
+				if (record) {
+					submitLatency.record(operationEnd - operationStart);
+				}
+				if (shouldFlush(config, iteration)) {
+					long flushStart = System.nanoTime();
+					try {
+						driver.flush();
+					} catch (InterruptedException e) {
+						Thread.currentThread().interrupt();
+						recordError(errors, firstError, e);
+						return;
+					} catch (IOException e) {
+						recordError(errors, firstError, e);
+						continue;
+					}
+					long flushEnd = System.nanoTime();
+					if (record) {
+						flushLatency.record(flushEnd - flushStart);
+					}
+				}
+				if (record) {
+					opCounts[threadIndex]++;
+					opsCounter.increment();
+				}
+			}
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+		}
+	}
+
+	private static boolean shouldFlush(LoadConfig config, long iteration) {
+		return switch (config.flushMode()) {
+			case EVERY_OP -> true;
+			case EVERY_N -> iteration % config.flushEvery() == 0;
+			case END_ONLY -> false;
+		};
+	}
+
+	private static boolean joinWorkers(Thread[] workers, Duration timeout) throws InterruptedException {
+		long deadline = System.nanoTime() + timeout.toNanos();
+		boolean stalled = false;
+		for (Thread worker : workers) {
+			long remaining = deadline - System.nanoTime();
+			if (remaining <= 0) {
+				stalled = true;
+				break;
+			}
+			worker.join(Duration.ofNanos(remaining));
+			if (worker.isAlive()) {
+				stalled = true;
+				break;
+			}
+		}
+		if (stalled) {
+			for (Thread worker : workers) {
+				worker.interrupt();
+			}
+			dumpThreads();
+		}
+		return stalled;
+	}
+
+	private static void dumpThreads() {
+		System.err.println("Load test stalled; dumping threads");
+		Thread.getAllStackTraces().forEach((thread, stack) -> {
+			System.err.println(thread);
+			for (StackTraceElement element : stack) {
+				System.err.println("\tat " + element);
+			}
+		});
+	}
+
+	private static void recordError(LongAdder errors, AtomicReference<Throwable> firstError, Throwable error) {
+		errors.increment();
+		firstError.compareAndSet(null, error);
+	}
+
+	private static LatencySummary mergeLatencies(LatencyRecorder[] recorders) {
+		Histogram merged = LatencyRecorder.newHistogram();
+		for (LatencyRecorder recorder : recorders) {
+			recorder.addTo(merged);
+		}
+		return LatencySummary.of(merged);
+	}
+
+	private static DriverFactory<TestEntity> driverFactory(LoadConfig config) {
+		return switch (config.driver()) {
+			case SIMPLE -> BoskConfig.simpleDriver();
+		};
+	}
+
+	private static final DateTimeFormatter RUN_ID_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
+}
