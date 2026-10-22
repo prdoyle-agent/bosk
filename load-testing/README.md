@@ -62,7 +62,7 @@ Apple Silicon, 12 logical cores (6 performance, 6 efficiency), 9 GB max heap, JD
 | 24 | 2,243,474 | 708 ns | 1.667 us | 125.8 ms | 87 |
 | 48 | 2,406,233 | 708 ns | 1.167 us | 257.2 ms | 195 |
 
-The in-memory driver plateaus at roughly 2.4 million operations per second on this machine. Adding threads beyond the performance-core count does not improve throughput; it raises mean and tail latency instead. The p99 stays around 1.3 to 1.7 microseconds while the maximum grows into the hundreds of milliseconds, which is consistent with scheduling and GC spikes rather than systemic queueing.
+The in-memory driver plateaus at roughly 2.4 million operations per second on this machine. That plateau is the synchronized `LocalDriver`: it applies one update at a time, so extra threads add contention rather than parallel work. The per-update critical section is about 420 ns, which matches the single-thread submit mean of 427 ns. Adding threads beyond the performance-core count does not improve throughput; it raises mean and tail latency instead. The p99 stays around 1.3 to 1.7 microseconds while the maximum grows into the hundreds of milliseconds, which is consistent with scheduling and GC spikes rather than systemic queueing.
 
 This is the baseline the Mongo runs will be compared against.
 
