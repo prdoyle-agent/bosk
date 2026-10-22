@@ -179,7 +179,8 @@ Flush is not the main factor. Turning it off moved one-big-document from 28 to 3
 - Give the grafted documents their own revisions, or separate the flush/ordering marker, so a grafted update does not write the root document. This is the only way to make Pando scale for concurrent writers.
 - Keep the target pre-delete unless the driver can cheaply prove that the state field will appear in the change event. A per-document marker or revision is the practical way to provide that proof without comparing or hashing the state.
 - Add such a marker or revision and teach the gathering logic to treat a marker-only event as a no-op. That removes the need for the pre-delete entirely and recovers most of the single-thread gap.
-- Replace the two immediate retries plus disconnect with backoff and jitter. That turns a conflict into latency instead of a visible error, but it does not remove the root-document bottleneck.
+- Reconsider the main-event rule for no-op updates. If the state did not change, a revision-only event could mark the transaction complete and be treated as a no-op. Inferring the state from an event that lacks it is possible in principle, but not attractive for large state.
+- The driver already retries a transient transaction error twice immediately, then disconnects and retries once after reconnection. It does not back off indefinitely. A better retry policy could turn a conflict into latency, but it does not remove the root-document bottleneck.
 - Batch several updates into one transaction and one revision bump.
 - Until then, treat grafted Pando as a single-writer format: 912 ops/s at one thread, with multiple readers.
 
