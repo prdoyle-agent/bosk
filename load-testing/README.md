@@ -160,14 +160,25 @@ Two things differ from SEQUOIA:
 
 Concurrent transactions that write the same document conflict. Our workload is deliberately disjoint at the entity level, so in the grafted case the root revision is the only shared write. That makes the conflict easy to attribute. Graft points solve the 16 MB document limit, not the write-concurrency limit.
 
-The single-thread difference between one-big-document and SEQUOIA comes from write amplification. The one-big-document branch pre-deletes the field and then sets it in the same large root document, inside a transaction, so each update rewrites the state document twice. SEQUOIA performs one atomic update that sets the field and increments the revision. Grafted Pando writes a small entity document plus the small root revision document, which is why it is fastest at one thread.
+The pre-delete is a major part of the single-thread cost. `doReplacement` deletes the target field before setting it, so one-big-document writes the large root document twice per update. In a temporary local experiment with the target pre-delete disabled, the picture changed sharply:
+
+| Case | With pre-delete | Without |
+|---|---:|---:|
+| One-big-document, 10,000 entities | 28 | 313 |
+| One-big-document, 1,000 entities | 435 | 1,048 |
+| Grafted Pando, 10,000 entities | 819 | 968 |
+
+The concurrency failures remained: four-thread one-big-document still produced errors and 5 ops/s. So the pre-delete explains most of the single-thread gap, while the root revision explains the concurrency failure.
+
+The pre-delete is not optional in general. It exists to prevent MongoDB from suppressing a no-op update event. If a replacement leaves the document unchanged, for example replacing a `Catalog` with an identical one, MongoDB emits no change event, and Pando's gathering logic relies on seeing a main event before the revision event. Deleting the field first forces a change. It is unrelated to `OrphanDocumentMode`: HASTY versus EARNEST controls whether orphan sub-documents are deleted, not whether a no-op update emits an event. Removing the pre-delete globally would be incorrect. Removing it only when the replacement is guaranteed to change the document would be safe, and a per-document marker or revision would remove the need for it entirely.
 
 Flush is not the main factor. Turning it off moved one-big-document from 28 to 36 ops/s and SEQUOIA from 317 to 456 ops/s.
 
 ### Possible directions
 
 - Give the grafted documents their own revisions, or separate the flush/ordering marker, so a grafted update does not write the root document. This is the only way to make Pando scale for concurrent writers.
-- Avoid the pre-delete for a simple field replacement, so one-big-document performs one write instead of two.
+- Skip the target pre-delete when the replacement is guaranteed to change the document, and keep it for no-op-capable container replacements. That recovers most of the single-thread gap without weakening the change-event contract.
+- Add a per-document marker or revision so a no-op cannot be suppressed, which removes the need for the pre-delete entirely.
 - Replace the two immediate retries plus disconnect with backoff and jitter. That turns a conflict into latency instead of a visible error, but it does not remove the root-document bottleneck.
 - Batch several updates into one transaction and one revision bump.
 - Until then, treat grafted Pando as a single-writer format: 912 ops/s at one thread, with multiple readers.
