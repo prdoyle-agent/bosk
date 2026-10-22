@@ -926,6 +926,19 @@ For Pando, the situation is similar, except that instead of having a single docu
 there are multiple documents with `_id` values that start with `|` (vertical bar)
 and that describe where the document fits within the overall BSON structure.
 
+When choosing a format, the current trade-off is:
+
+- _Sequoia_ is limited to 16MB of state. Each update is a single atomic document write.
+  Concurrent writers contend on that document, but MongoDB does not abort their updates,
+  so Sequoia has higher concurrent write throughput in current testing.
+- _Pando_ with graft points supports states larger than 16MB.
+  Each update is a multi-document transaction that also updates the root revision document
+  shared by all writers, so concurrent writers can hit transaction write conflicts.
+  It is currently best suited to lower write rates or a single writer.
+
+If your state fits within 16MB, prefer Sequoia.
+Choose Pando with graft points only when you need the larger capacity.
+
 `MongoDriver` is designed to tolerate some amount of manual intervention in the database by an operator.
 If something has gone wrong and you need to do an emergency repair,
 `MongoDriver` will try to accommodate your changes, especially if you increment the `revision` number.
