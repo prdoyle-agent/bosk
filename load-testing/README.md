@@ -120,13 +120,14 @@ Using `/catalog` and `/sideTable` as graft points:
 
 | Threads | Entities | Ops/s | Errors |
 |---:|---:|---:|---:|
+| 1 | 10,000 | 912 | 0 |
 | 2 | 10,000 | 0 | 0 |
 | 4 | 10,000 | 0 | 1 |
 | 6 | 10,000 | 8 | 45 |
 | 12 | 10,000 | 1 | 62 |
 | 6 | 1,000 | 1 | 9 |
 
-Grafting the catalog and side table does not fix the problem. Every Pando failure is the same:
+Grafting helps a lot at one thread, where it reaches 912 ops/s, faster than SEQUOIA. Each update writes a small entity document instead of the whole state. It does not help under concurrency. Every Pando failure is the same:
 
 ```
 DisconnectedException: MongoCommandException: error 112 (WriteConflict):
@@ -134,8 +135,29 @@ Write conflict during plan execution and yielding is disabled.
 Please retry your operation or multi-document transaction.
 ```
 
-The response carries the `TransientTransactionError` label. `MainDriver` retries a transient transaction error twice immediately, then disconnects and waits; under sustained contention it gives up and surfaces `DisconnectedException`. The 10 s tails correspond to that retry and disconnect cycle. This is a real concurrency limitation of the Pando path, not a harness artifact, and it deserves investigation in `bosk-mongo`.
+The response carries the `TransientTransactionError` label. `MainDriver` retries a transient transaction error twice immediately, then disconnects and waits; under sustained contention it gives up and surfaces `DisconnectedException`. The 10 s tails correspond to that retry and disconnect cycle.
+
+### Why Pando behaves differently
+
+Two things differ from SEQUOIA:
+
+1. **Pando uses a multi-document transaction for every update.** `PandoFormatDriver.doReplacement` and `doDelete` call `ensureTransactionStarted`, and `MainDriver` commits the transaction after the operation. `SequoiaFormatDriver.doUpdate` is a single atomic `updateOne` with no transaction.
+2. **Pando bumps the `revision` field of the root document on every update.** For a grafted entity, the entity document is separate, but `doReplacement` still calls `doUpdate(blankUpdateDoc(), documentFilter(rootRef))` to increment the collection-wide revision. `multi-doc.md` describes that revision as the collection-wide flush marker. Every update therefore writes the root document.
+
+Concurrent transactions that write the same document conflict. Our workload is deliberately disjoint at the entity level, so in the grafted case the root revision is the only shared write. That makes the conflict easy to attribute. Graft points solve the 16 MB document limit, not the write-concurrency limit.
+
+The single-thread difference between one-big-document and SEQUOIA comes from write amplification. The one-big-document branch pre-deletes the field and then sets it in the same large root document, inside a transaction, so each update rewrites the state document twice. SEQUOIA performs one atomic update that sets the field and increments the revision. Grafted Pando writes a small entity document plus the small root revision document, which is why it is fastest at one thread.
+
+Flush is not the main factor. Turning it off moved one-big-document from 28 to 36 ops/s and SEQUOIA from 317 to 456 ops/s.
+
+### Possible directions
+
+- Give the grafted documents their own revisions, or separate the flush/ordering marker, so a grafted update does not write the root document. This is the only way to make Pando scale for concurrent writers.
+- Avoid the pre-delete for a simple field replacement, so one-big-document performs one write instead of two.
+- Replace the two immediate retries plus disconnect with backoff and jitter. That turns a conflict into latency instead of a visible error, but it does not remove the root-document bottleneck.
+- Batch several updates into one transaction and one revision bump.
+- Until then, treat grafted Pando as a single-writer format: 912 ops/s at one thread, with multiple readers.
 
 One reporting caveat: `verified=true` means the final state matched the last successfully submitted values. When updates fail, the workload does not record them, so the final state can still match. The `errors` column and the process exit code are the failure signal.
 
-The next steps are to investigate the Pando contention, run SEQUOIA at larger state sizes and under faults, and add a read-only workload.
+The next steps are to test the Pando hypotheses in `bosk-mongo`, run SEQUOIA at larger state sizes and under faults, and add a read-only workload.
