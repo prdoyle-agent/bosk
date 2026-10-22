@@ -10,7 +10,8 @@
  * writes a summary plus a time series to CSV. The runner does not ramp by itself; a ramp is a
  * sequence of runs with different {@code --threads} values, each in a fresh process.
  *
- * <p>The module is deliberately separate from the published libraries. It is not shipped, and it
- * is expected to grow Mongo and SQL driver support, fault injection, and state-shape knobs.
+ * <p>The module is deliberately separate from the published libraries. It is not shipped. It
+ * supports the in-memory driver and the Mongo driver in SEQUOIA and Pando formats; SQL driver
+ * support, fault injection, and state-shape knobs are still to come.
  */
 package works.bosk.load;

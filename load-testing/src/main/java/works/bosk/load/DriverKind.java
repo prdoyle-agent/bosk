@@ -4,17 +4,37 @@ import java.util.Locale;
 
 /**
  * The driver under test.
- *
- * <p>This first slice only supports the in-memory driver. The Mongo variants will be added
- * once the harness has a baseline to compare against.
  */
 public enum DriverKind {
-	SIMPLE;
+	SIMPLE,
+
+	/**
+	 * MongoDriver using the SEQUOIA format.
+	 */
+	MONGO_SEQUOIA,
+
+	/**
+	 * MongoDriver using the Pando format with the whole state in one document.
+	 */
+	MONGO_PANDO,
+
+	/**
+	 * MongoDriver using the Pando format with the root catalog grafted into separate documents.
+	 */
+	MONGO_PANDO_GRAFTED;
+
+	public boolean isMongo() {
+		return this != SIMPLE;
+	}
 
 	public static DriverKind fromCli(String value) {
 		return switch (value.toLowerCase(Locale.ROOT)) {
 			case "simple" -> SIMPLE;
-			default -> throw new IllegalArgumentException("Unsupported driver \"" + value + "\"; only \"simple\" is implemented");
+			case "mongo-sequoia" -> MONGO_SEQUOIA;
+			case "mongo-pando" -> MONGO_PANDO;
+			case "mongo-pando-grafted", "mongo-grafted" -> MONGO_PANDO_GRAFTED;
+			default -> throw new IllegalArgumentException(
+				"Unsupported driver \"" + value + "\"; expected simple, mongo-sequoia, mongo-pando, or mongo-pando-grafted");
 		};
 	}
 }

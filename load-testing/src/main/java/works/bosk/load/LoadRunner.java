@@ -15,8 +15,16 @@ import works.bosk.Bosk;
 import works.bosk.BoskConfig;
 import works.bosk.BoskDriver;
 import works.bosk.DriverFactory;
+import works.bosk.drivers.mongo.BsonSerializer;
+import works.bosk.drivers.mongo.MongoDriver;
+import works.bosk.drivers.mongo.MongoDriverSettings;
+import works.bosk.drivers.mongo.PandoFormat;
 import works.bosk.exceptions.InvalidTypeException;
 import works.bosk.testing.drivers.state.TestEntity;
+
+import static java.util.Objects.requireNonNull;
+import static works.bosk.drivers.mongo.MongoDriverSettings.DatabaseFormat.SEQUOIA;
+import static works.bosk.drivers.mongo.MongoDriverSettings.InitialDatabaseUnavailableMode.FAIL_FAST;
 
 /**
  * Runs one {@link LoadConfig} and returns the measurements.
@@ -29,6 +37,25 @@ import works.bosk.testing.drivers.state.TestEntity;
 public final class LoadRunner {
 
 	public LoadResult run(LoadConfig config) throws InvalidTypeException, IOException, InterruptedException {
+		if (config.driver().isMongo()) {
+			try (MongoEnvironment mongo = MongoEnvironment.start()) {
+				mongo.dropCollection(MONGO_DATABASE, MONGO_COLLECTION);
+				AtomicReference<MongoDriver> mongoDriver = new AtomicReference<>();
+				try {
+					return run(config, mongo, mongoDriver);
+				} finally {
+					MongoDriver driver = mongoDriver.get();
+					if (driver != null) {
+						driver.close();
+					}
+				}
+			}
+		} else {
+			return run(config, null, new AtomicReference<>());
+		}
+	}
+
+	private LoadResult run(LoadConfig config, MongoEnvironment mongo, AtomicReference<MongoDriver> mongoDriver) throws InvalidTypeException, IOException, InterruptedException {
 		Instant startedAt = Instant.now();
 		String runId = RUN_ID_FORMAT.format(startedAt.atOffset(ZoneOffset.UTC))
 			+ (config.label().isEmpty() ? "" : "-" + config.label());
@@ -40,7 +67,7 @@ public final class LoadRunner {
 			TestEntity.class,
 			workload::initialRoot,
 			BoskConfig.<TestEntity>builder()
-				.driverFactory(driverFactory(config))
+				.driverFactory(driverFactory(config, mongo, mongoDriver))
 				.build());
 		workload.initialize(bosk);
 		BoskDriver driver = bosk.driver();
@@ -262,11 +289,37 @@ public final class LoadRunner {
 		return LatencySummary.of(merged);
 	}
 
-	private static DriverFactory<TestEntity> driverFactory(LoadConfig config) {
+	private static DriverFactory<TestEntity> driverFactory(LoadConfig config, MongoEnvironment mongo, AtomicReference<MongoDriver> mongoDriver) {
 		return switch (config.driver()) {
 			case SIMPLE -> BoskConfig.simpleDriver();
+			case MONGO_SEQUOIA, MONGO_PANDO, MONGO_PANDO_GRAFTED -> {
+				MongoEnvironment environment = requireNonNull(mongo, "mongo environment");
+				MongoDriverSettings settings = MongoDriverSettings.builder()
+					.database(MONGO_DATABASE)
+					.collection(MONGO_COLLECTION)
+					.preferredDatabaseFormat(format(config.driver()))
+					.initialDatabaseUnavailableMode(FAIL_FAST)
+					.build();
+				yield (boskInfo, downstream) -> {
+					MongoDriver driver = MongoDriver.<TestEntity>factory(environment.clientSettings(), settings, new BsonSerializer())
+						.build(boskInfo, downstream);
+					mongoDriver.set(driver);
+					return driver;
+				};
+			}
+		};
+	}
+
+	private static MongoDriverSettings.DatabaseFormat format(DriverKind driver) {
+		return switch (driver) {
+			case MONGO_SEQUOIA -> SEQUOIA;
+			case MONGO_PANDO -> PandoFormat.oneBigDocument();
+			case MONGO_PANDO_GRAFTED -> PandoFormat.withGraftPoints("/catalog", "/sideTable");
+			case SIMPLE -> throw new IllegalArgumentException("The simple driver has no Mongo format");
 		};
 	}
 
 	private static final DateTimeFormatter RUN_ID_FORMAT = DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss");
+	private static final String MONGO_DATABASE = "bosk-load";
+	private static final String MONGO_COLLECTION = "state";
 }

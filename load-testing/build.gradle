@@ -13,9 +13,12 @@ java {
 dependencies {
 	implementation platform(libs.junit.bom)
 	implementation project(":bosk-core")
+	implementation project(":bosk-mongo")
 	implementation project(":bosk-testing")
 	implementation libs.slf4j.api
 	implementation libs.hdrhistogram
+	implementation libs.testcontainers
+	implementation libs.testcontainers.mongodb
 	runtimeOnly libs.logback.classic
 
 	testImplementation platform(libs.junit.bom)

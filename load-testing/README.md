@@ -2,7 +2,16 @@
 
 A load-testing harness for Bosk drivers. This module is not published; it is a development tool.
 
-The first slice runs a conflict-free workload against the in-memory driver. Each worker owns a disjoint slice of the root catalog and repeatedly replaces the `string` field of its entities, so the final state is deterministic and can be verified exactly. The harness measures update and flush latency with per-worker HdrHistograms, samples heap and GC once per second, and writes the results to CSV.
+The harness runs a conflict-free workload against a driver. Each worker owns a disjoint slice of the root catalog and repeatedly replaces the `string` field of its entities, so the final state is deterministic and can be verified exactly. It measures update and flush latency with per-worker HdrHistograms, samples heap and GC once per second, and writes the results to CSV.
+
+Supported drivers:
+
+- `simple`: the in-memory driver.
+- `mongo-sequoia`: MongoDriver using SEQUOIA.
+- `mongo-pando`: MongoDriver using Pando with the whole state in one document.
+- `mongo-pando-grafted`: MongoDriver using Pando with `/catalog` and `/sideTable` grafted into separate documents.
+
+The Mongo drivers start a disposable MongoDB replica set with Testcontainers, so Docker must be running. Each run gets a fresh container and a fresh collection.
 
 ## Running
 
@@ -14,6 +23,7 @@ Run one configuration per process so that JIT state and heap do not carry over b
 ./gradlew :load-testing:run --args="--threads=P --warmup=10s --duration=30s --label=all"
 ./gradlew :load-testing:run --args="--threads=2P --warmup=10s --duration=30s --label=twice"
 ./gradlew :load-testing:run --args="--threads=4P --warmup=10s --duration=30s --label=four"
+./gradlew :load-testing:run --args="--driver=mongo-sequoia --threads=6 --warmup=3s --duration=10s --label=seq"
 ```
 
 `P` is `Runtime.availableProcessors()`. Thread counts may also be absolute integers, `P/2`, `2P`, or `2*P`.
@@ -22,7 +32,7 @@ Options:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `--driver` | `simple` | Driver under test |
+| `--driver` | `simple` | `simple`, `mongo-sequoia`, `mongo-pando`, or `mongo-pando-grafted` |
 | `--entities` | `10000` | Number of entities in the root catalog |
 | `--threads` | `P` | Worker threads |
 | `--warmup` | `10s` | Warmup duration; supports `ms`, `s`, `m`, `h` |
@@ -78,4 +88,54 @@ At 6 threads, keeping everything else the same:
 
 A larger catalog lowers throughput and raises per-update latency, even without serialization in the driver. Larger values cost allocation and GC; the 100,000-entity run had fewer collections but each one was longer, for 263 ms of total GC time against 87 ms for the 10,000-entity run. The `heap_used_after` column is a point-in-time value; use `samples.csv` for the sawtooth.
 
-The next steps are SEQUOIA and one-big-document, then conflicting updates, hook pressure, and fault injection.
+## Mongo results
+
+10,000 entities, 16-byte values, 3 s warmup, 10 s measurement, flush after every update. Each run used a fresh MongoDB 9.0.4 replica set.
+
+### SEQUOIA
+
+| Threads | Ops/s | Submit p50 | Submit p99 | Flush p50 | Errors |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 317 | 1.421 ms | 2.652 ms | 1.234 ms | 0 |
+| 6 | 697 | 2.410 ms | 71.238 ms | 1.450 ms | 0 |
+| 12 | 662 | 3.086 ms | 390.857 ms | 1.846 ms | 0 |
+| 24 | 605 | 6.992 ms | 622.854 ms | 3.572 ms | 0 |
+
+SEQUOIA sustains roughly 600 to 700 operations per second and stays correct through 24 threads. The flush p50 stays in the low milliseconds, but the submit p99 grows from about 2.7 ms to 623 ms as concurrency rises. That points at queueing in the driver's local apply path rather than at the database round trip.
+
+### Pando one-big-document
+
+| Threads | Ops/s | Submit p50 | Submit p99 | Errors |
+|---:|---:|---:|---:|---:|
+| 1 | 28 | 26.903 ms | 53.674 ms | 0 |
+| 2 | 5 | 63.144 ms | 10.217 s | 0 |
+| 4 | 17 | 128.647 ms | 204.210 ms | 84 |
+| 6 | 2 | 37.585 ms | 10.251 s | 43 |
+
+One-big-document is limited by rewriting the whole state document. At two threads it already spends 10 s tails in retries; at four and six threads it surfaces errors. A 1,000-entity run at six threads produced no successful updates and one error.
+
+### Grafted Pando
+
+Using `/catalog` and `/sideTable` as graft points:
+
+| Threads | Entities | Ops/s | Errors |
+|---:|---:|---:|---:|
+| 2 | 10,000 | 0 | 0 |
+| 4 | 10,000 | 0 | 1 |
+| 6 | 10,000 | 8 | 45 |
+| 12 | 10,000 | 1 | 62 |
+| 6 | 1,000 | 1 | 9 |
+
+Grafting the catalog and side table does not fix the problem. Every Pando failure is the same:
+
+```
+DisconnectedException: MongoCommandException: error 112 (WriteConflict):
+Write conflict during plan execution and yielding is disabled.
+Please retry your operation or multi-document transaction.
+```
+
+The response carries the `TransientTransactionError` label. `MainDriver` retries a transient transaction error twice immediately, then disconnects and waits; under sustained contention it gives up and surfaces `DisconnectedException`. The 10 s tails correspond to that retry and disconnect cycle. This is a real concurrency limitation of the Pando path, not a harness artifact, and it deserves investigation in `bosk-mongo`.
+
+One reporting caveat: `verified=true` means the final state matched the last successfully submitted values. When updates fail, the workload does not record them, so the final state can still match. The `errors` column and the process exit code are the failure signal.
+
+The next steps are to investigate the Pando contention, run SEQUOIA at larger state sizes and under faults, and add a read-only workload.

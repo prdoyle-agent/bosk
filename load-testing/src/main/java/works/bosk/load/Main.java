@@ -107,7 +107,7 @@ public final class Main {
 		System.out.println("""
 			Usage: load-testing [options]
 
-			--driver=simple          Driver under test (only simple is implemented)
+			--driver=simple          Driver: simple, mongo-sequoia, mongo-pando, mongo-pando-grafted
 			--entities=10000         Number of entities in the root catalog
 			--threads=P              Worker threads; also accepts P/2, 2P, 2*P, or an integer
 			--warmup=10s             Warmup duration; supports ms, s, m, h
@@ -125,6 +125,10 @@ public final class Main {
 			./gradlew :load-testing:run --args="--threads=1 --warmup=10s --duration=30s"
 			./gradlew :load-testing:run --args="--threads=P/2 --warmup=10s --duration=30s"
 			./gradlew :load-testing:run --args="--threads=P --warmup=10s --duration=30s"
+			./gradlew :load-testing:run --args="--driver=mongo-sequoia --threads=6 --warmup=3s --duration=10s"
+
+			The Mongo drivers start a disposable MongoDB replica set with Testcontainers, so Docker
+			must be running. Each run gets a fresh container and a fresh collection.
 			""");
 	}
 
