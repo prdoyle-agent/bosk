@@ -64,4 +64,18 @@ Apple Silicon, 12 logical cores (6 performance, 6 efficiency), 9 GB max heap, JD
 
 The in-memory driver plateaus at roughly 2.4 million operations per second on this machine. Adding threads beyond the performance-core count does not improve throughput; it raises mean and tail latency instead. The p99 stays around 1.3 to 1.7 microseconds while the maximum grows into the hundreds of milliseconds, which is consistent with scheduling and GC spikes rather than systemic queueing.
 
-This is the baseline the Mongo runs will be compared against. The next steps are SEQUOIA and one-big-document, then state-size scaling, conflicting updates, hook pressure, and fault injection.
+This is the baseline the Mongo runs will be compared against.
+
+## State and value size
+
+At 6 threads, keeping everything else the same:
+
+| Entities | Value bytes | Throughput (ops/s) | Submit p50 | Submit p99 | Heap after | GC collections |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 16 | 2,248,866 | 709 ns | 1.541 us | 17.2 MB | 89 |
+| 100,000 | 16 | 1,568,365 | 1.083 us | 2.209 us | 1,211.8 MB | 24 |
+| 10,000 | 1024 | 1,897,315 | 875 ns | 1.875 us | 535.1 MB | 77 |
+
+A larger catalog lowers throughput and raises per-update latency, even without serialization in the driver. Larger values cost allocation and GC; the 100,000-entity run had fewer collections but each one was longer, for 263 ms of total GC time against 87 ms for the 10,000-entity run. The `heap_used_after` column is a point-in-time value; use `samples.csv` for the sawtooth.
+
+The next steps are SEQUOIA and one-big-document, then conflicting updates, hook pressure, and fault injection.
