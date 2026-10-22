@@ -106,6 +106,21 @@ A root-scope `BoskHook` that sleeps while multiple workers submit updates. The h
 
 The OOM happens before the summary is written, so there is no CSV row; the process exit and `OutOfMemoryError` are the failure signal. This is a retention failure, not a throughput cliff. The one-worker run shows the hook itself is not the problem; two submitters are enough to grow the queue. See #495 for the design options and open questions.
 
+### With Mongo
+
+The Mongo change receiver is the only thread that applies changes locally, and it is also the hook drainer. A slow hook therefore throttles local apply, and the pending state changes accumulate in MongoDB rather than in the in-memory hook queue.
+
+`mongo-sequoia`, 10 entities, 100 KB values, 4 threads, 512 MB heap:
+
+| Hook | Flush | Duration | Submitted | Local apply | Heap | Result |
+|---:|---|---:|---:|---:|---:|---|
+| 100 ms | everyOp | 30 s | 279 (9/s) | kept up | ~31 MB | healthy |
+| 1 s | end | 30 s | 37,882 (1,263/s) | ~revision 70 | ~99 MB | flush timeout, then recovered |
+
+The second run submitted 37,882 updates, but the change receiver had applied only about 70 revisions when the measurement ended. The final flush timed out waiting for revision 37,887 and then recovered. There was no hook-queue OOM.
+
+That is the natural persistent queue: MongoDB holds the pending state changes. It is not a durable hook queue; pending hook notifications are still in memory.
+
 ## Mongo results
 
 10,000 entities, 16-byte values, 3 s warmup, 10 s measurement, flush after every update. Each run used a fresh MongoDB 9.0.4 replica set.
