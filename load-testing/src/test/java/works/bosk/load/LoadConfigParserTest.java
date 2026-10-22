@@ -58,6 +58,7 @@ class LoadConfigParserTest {
 			"--flush=everyN",
 			"--flushEvery=7",
 			"--valueBytes=5",
+			"--hookLatency=1ms",
 			"--seed=42",
 			"--label=example",
 			"--out=somewhere"
@@ -70,6 +71,7 @@ class LoadConfigParserTest {
 		assertEquals(FlushMode.EVERY_N, config.flushMode());
 		assertEquals(7, config.flushEvery());
 		assertEquals(5, config.valueBytes());
+		assertEquals(Duration.ofMillis(1), config.hookLatency());
 		assertEquals(42, config.seed());
 		assertEquals("example", config.label());
 		assertEquals(Path.of("somewhere"), config.outputDirectory());

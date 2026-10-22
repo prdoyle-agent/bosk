@@ -28,6 +28,8 @@ Run one configuration per process so that JIT state and heap do not carry over b
 
 `P` is `Runtime.availableProcessors()`. Thread counts may also be absolute integers, `P/2`, `2P`, or `2*P`.
 
+Pass JVM arguments to a run with `-PloadJvmArgs`, for example `-PloadJvmArgs=-Xmx256m`. This applies only to the forked run JVM.
+
 Options:
 
 | Option | Default | Meaning |
@@ -40,6 +42,7 @@ Options:
 | `--flush` | `everyOp` | `everyOp`, `everyN`, or `end` |
 | `--flushEvery` | `100` | Flush interval for `everyN` |
 | `--valueBytes` | `16` | Length of the string values written by the workload |
+| `--hookLatency` | `0ms` | Sleep time for a root-scope hook; zero disables it |
 | `--stallTimeout` | `60s` | How long to wait for workers to stop before dumping threads |
 | `--label` | empty | Label included in the output |
 | `--out` | `build/load-results` | Output directory |
@@ -87,6 +90,21 @@ At 6 threads, keeping everything else the same:
 | 10,000 | 1024 | 1,897,315 | 875 ns | 1.875 us | 535.1 MB | 77 |
 
 A larger catalog lowers throughput and raises per-update latency, even without serialization in the driver. Larger values cost allocation and GC; the 100,000-entity run had fewer collections but each one was longer, for 263 ms of total GC time against 87 ms for the 10,000-entity run. The `heap_used_after` column is a point-in-time value; use `samples.csv` for the sawtooth.
+
+## Slow hooks
+
+A root-scope `BoskHook` that sleeps while multiple workers submit updates. The hook queue is unbounded, and each queued closure captures the state root for that update. With one worker, the submitter drains its own hooks and the run completes. With two or more, the other workers keep submitting and enqueueing while the drainer sleeps, and the queue retains state versions until the heap is exhausted.
+
+`simpleDriver`, 1,000 entities, 2 s duration, 256 MB heap, 1 ms hook:
+
+| Threads | Hook | Result |
+|---:|---|---|
+| 4 | none | completed |
+| 1 | 1 ms | completed |
+| 2 | 1 ms | OutOfMemoryError |
+| 4 | 1 ms | OutOfMemoryError |
+
+The OOM happens before the summary is written, so there is no CSV row; the process exit and `OutOfMemoryError` are the failure signal. This is a retention failure, not a throughput cliff. The one-worker run shows the hook itself is not the problem; two submitters are enough to grow the queue. See #495 for the design options and open questions.
 
 ## Mongo results
 

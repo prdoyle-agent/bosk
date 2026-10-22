@@ -22,6 +22,7 @@ import static java.util.Objects.requireNonNull;
  * @param flushMode        when to call {@link works.bosk.BoskDriver#flush()}
  * @param flushEvery       the interval used by {@link FlushMode#EVERY_N}
  * @param valueBytes       the length of the string values written by the workload
+ * @param hookLatency      how long a root-scope hook sleeps per invocation; zero disables the hook
  * @param seed             reserved for future randomized workloads
  * @param stallTimeout     how long to wait for workers to stop before declaring a stall
  * @param outputDirectory  where the summary and sample CSVs are written
@@ -36,6 +37,7 @@ public record LoadConfig(
 	FlushMode flushMode,
 	int flushEvery,
 	int valueBytes,
+	Duration hookLatency,
 	long seed,
 	Duration stallTimeout,
 	Path outputDirectory
@@ -47,6 +49,7 @@ public record LoadConfig(
 		requireNonNull(warmup, "warmup");
 		requireNonNull(duration, "duration");
 		requireNonNull(flushMode, "flushMode");
+		requireNonNull(hookLatency, "hookLatency");
 		requireNonNull(stallTimeout, "stallTimeout");
 		requireNonNull(outputDirectory, "outputDirectory");
 		if (entityCount <= 0) {
@@ -70,6 +73,9 @@ public record LoadConfig(
 		if (valueBytes <= 0) {
 			throw new IllegalArgumentException("valueBytes must be positive");
 		}
+		if (hookLatency.isNegative()) {
+			throw new IllegalArgumentException("hookLatency must not be negative");
+		}
 	}
 
 	public static Builder builder() {
@@ -86,6 +92,7 @@ public record LoadConfig(
 		private FlushMode flushMode = FlushMode.EVERY_OP;
 		private int flushEvery = 100;
 		private int valueBytes = 16;
+		private Duration hookLatency = Duration.ZERO;
 		private long seed = 1L;
 		private Duration stallTimeout = Duration.ofSeconds(60);
 		private Path outputDirectory = Path.of("build", "load-results");
@@ -135,6 +142,11 @@ public record LoadConfig(
 			return this;
 		}
 
+		public Builder hookLatency(Duration hookLatency) {
+			this.hookLatency = hookLatency;
+			return this;
+		}
+
 		public Builder seed(long seed) {
 			this.seed = seed;
 			return this;
@@ -161,6 +173,7 @@ public record LoadConfig(
 				flushMode,
 				flushEvery,
 				valueBytes,
+				hookLatency,
 				seed,
 				stallTimeout,
 				outputDirectory

@@ -70,6 +70,7 @@ public final class LoadRunner {
 				.driverFactory(driverFactory(config, mongo, mongoDriver))
 				.build());
 		workload.initialize(bosk);
+		registerHook(bosk, config);
 		BoskDriver driver = bosk.driver();
 
 		CountDownLatch start = new CountDownLatch(1);
@@ -287,6 +288,13 @@ public final class LoadRunner {
 			recorder.addTo(merged);
 		}
 		return LatencySummary.of(merged);
+	}
+
+	private static void registerHook(Bosk<TestEntity> bosk, LoadConfig config) {
+		if (!config.hookLatency().isZero()) {
+			bosk.hookRegistrar().registerHook("load-hook", bosk.rootReference(),
+				_ -> Thread.sleep(config.hookLatency()));
+		}
 	}
 
 	private static DriverFactory<TestEntity> driverFactory(LoadConfig config, MongoEnvironment mongo, AtomicReference<MongoDriver> mongoDriver) {

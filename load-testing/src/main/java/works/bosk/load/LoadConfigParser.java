@@ -40,6 +40,7 @@ public final class LoadConfigParser {
 				case "flush" -> builder.flushMode(parseFlushMode(value));
 				case "flushEvery" -> builder.flushEvery(intValue(name, value));
 				case "valueBytes" -> builder.valueBytes(intValue(name, value));
+				case "hookLatency" -> builder.hookLatency(parseDuration(name, value));
 				case "seed" -> builder.seed(longValue(name, value));
 				case "stallTimeout" -> builder.stallTimeout(parseDuration(name, value));
 				case "out" -> builder.outputDirectory(Path.of(value));

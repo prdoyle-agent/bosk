@@ -45,4 +45,7 @@ tasks.named('run') {
 	javaLauncher = javaToolchains.launcherFor {
 		languageVersion = JavaLanguageVersion.of(jdkVersion)
 	}
+	if (project.hasProperty('loadJvmArgs')) {
+		jvmArgs(project.property('loadJvmArgs').toString().split('\\s+'))
+	}
 }
