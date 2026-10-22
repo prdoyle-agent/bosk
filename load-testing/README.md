@@ -170,15 +170,15 @@ The pre-delete is a major part of the single-thread cost. `doReplacement` delete
 
 The concurrency failures remained: four-thread one-big-document still produced errors and 5 ops/s. So the pre-delete explains most of the single-thread gap, while the root revision explains the concurrency failure.
 
-The pre-delete is not optional in general. It exists to prevent MongoDB from suppressing a no-op update event. If a replacement leaves the document unchanged, for example replacing a `Catalog` with an identical one, MongoDB emits no change event, and Pando's gathering logic relies on seeing a main event before the revision event. Deleting the field first forces a change. It is unrelated to `OrphanDocumentMode`: HASTY versus EARNEST controls whether orphan sub-documents are deleted, not whether a no-op update emits an event. Removing the pre-delete globally would be incorrect. Removing it only when the replacement is guaranteed to change the document would be safe, and a per-document marker or revision would remove the need for it entirely.
+The pre-delete is not optional in general. It exists to prevent MongoDB from suppressing a no-op update event. If a replacement leaves the document unchanged, for example replacing a `Catalog` with an identical one, MongoDB emits no change event, and Pando's gathering logic relies on seeing a main event before the revision event. Deleting the field first forces a change. It is unrelated to `OrphanDocumentMode`: HASTY versus EARNEST controls whether orphan sub-documents are deleted, not whether a no-op update emits an event. Removing the pre-delete globally would be incorrect. Removing it safely requires knowing that the update will still carry the state field in its change event. That is the hard part for `state`: metadata fields like `epoch` are small and trackable after the fact, but comparing or hashing the whole state on every update is not attractive. A per-document marker or revision is the better route, because it makes the event unambiguous without inspecting the state.
 
 Flush is not the main factor. Turning it off moved one-big-document from 28 to 36 ops/s and SEQUOIA from 317 to 456 ops/s.
 
 ### Possible directions
 
 - Give the grafted documents their own revisions, or separate the flush/ordering marker, so a grafted update does not write the root document. This is the only way to make Pando scale for concurrent writers.
-- Skip the target pre-delete when the replacement is guaranteed to change the document, and keep it for no-op-capable container replacements. That recovers most of the single-thread gap without weakening the change-event contract.
-- Add a per-document marker or revision so a no-op cannot be suppressed, which removes the need for the pre-delete entirely.
+- Keep the target pre-delete unless the driver can cheaply prove that the state field will appear in the change event. A per-document marker or revision is the practical way to provide that proof without comparing or hashing the state.
+- Add such a marker or revision and teach the gathering logic to treat a marker-only event as a no-op. That removes the need for the pre-delete entirely and recovers most of the single-thread gap.
 - Replace the two immediate retries plus disconnect with backoff and jitter. That turns a conflict into latency instead of a visible error, but it does not remove the root-document bottleneck.
 - Batch several updates into one transaction and one revision bump.
 - Until then, treat grafted Pando as a single-writer format: 912 ops/s at one thread, with multiple readers.
