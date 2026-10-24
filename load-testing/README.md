@@ -128,15 +128,15 @@ Further stress results, all with the `simple` driver and 1,000 entities unless n
 
 - 8 and 16 threads, 1 ms hook, 10 s: both completed, at about 2.2–2.3 million ops/s, with heap below 37 MB.
 - 4 threads, 10 ms hook, 10 s: completed, at about 2.3 million ops/s, with heap below 19 MB.
-- 4 threads, 100 ms hook, 10 s: completed in about 85 s when given a long enough stall timeout. The hook runs at its serialized limit of 10 calls/s, so the roughly 75 s after the load is about 750 tail calls. With a 10 s stall timeout, the harness reports a stall while that tail drains. This is not inefficient draining or unbounded retention; it is the cost of preserving per-event semantics for the sub-threshold tail. A lower threshold reduces the tail size.
+- 4 threads, 100 ms hook, 10 s: completed in about 10 s with a 10 s stall timeout, using ~43 MB of heap and one overload warning. Before the two-small-batch exit rule, the same run needed about 85 s to drain a ~750-call per-event tail. The hook still runs at its serialized limit of 10 calls/s; the improvement comes from coalescing the first undersized batch instead of draining that tail per event.
 - 4 threads, 1 ms hook, 32 MB heap, 10 s: completed, with about 13 MB live after the run.
 - 4 threads, 1 ms hook over every entity in a 10,000-entity catalog, 64 MB heap, 10 s: completed, with about 45 MB live after the run.
 - 100 root hooks, 1 ms each, 4 threads, 10 s: completed at about 99,000 ops/s. 1,000 root hooks completed at about 14,000 ops/s. Memory stayed bounded; the cost was serial hook execution.
 - A 60 s hook stalled after the harness timeout, with about 59 MB live. It did not exhaust the heap.
 
-The threshold is the memory bound. With a 64 MB heap, 10,000 and 20,000 queued executions completed; 50,000 reported a stall at a 10 s timeout with about 30 MB live, so that was tail drain rather than OOM; 100,000 exhausted the heap. At 128 MB, 100,000 completed after about 23 s of drain time. At 256 MB, 1,000,000 still exhausted the heap. The default of 1,000 is safe for this workload; configuring a much larger threshold lets the pre-overload queue retain more state.
+The threshold is the memory bound. With a 64 MB heap, 10,000 and 20,000 queued executions completed; 50,000 reported a stall at a 10 s timeout with about 30 MB live, so that was tail drain rather than OOM; 100,000 exhausted the heap. At 128 MB, 100,000 did not OOM in an earlier run but still produced a long stall; large thresholds remain a configuration hazard. At 256 MB, 1,000,000 still exhausted the heap. The default of 1,000 is safe for this workload; configuring a much larger threshold lets the pre-overload queue retain more state.
 
-The warning can repeat while the queue oscillates around the threshold. At a threshold of 10,000, a 2 s run produced over 150 warning lines. The message is accurate, but the repetition is noisy.
+The two-small-batch rule reduced warning repetition for sustained slow-hook overload: the 100 ms run emitted one warning. Fast hooks can still oscillate near the threshold; 2 threads with a 1 ms hook produced 17 warnings in 2 s. A warning cooldown would be a separate improvement.
 
 ### With Mongo
 
