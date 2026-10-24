@@ -2,13 +2,13 @@ package works.bosk;
 
 import java.io.IOException;
 import java.lang.reflect.Type;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.Semaphore;
@@ -261,11 +261,33 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 	 */
 	private final class LocalDriver implements BoskDriver {
 		final Bosk.DefaultStateFunction<R> initialStateFunction;
-		final Deque<Runnable> hookExecutionQueue = new ConcurrentLinkedDeque<>();
+		final Deque<HookExecution<?>> hookExecutionQueue = new ArrayDeque<>();
 		final Semaphore hookExecutionPermit = new Semaphore(1);
 
 		public LocalDriver(Bosk.DefaultStateFunction<R> initialStateFunction) {
 			this.initialStateFunction = initialStateFunction;
+		}
+
+		private final class HookExecution<S> {
+			final HookRegistration<S> registration;
+			final Reference<S> changedRef;
+			final R afterState;
+			final boolean existedBefore;
+			final boolean existsAfter;
+			final MapValue<String> attributes;
+
+			HookExecution(HookRegistration<S> registration, Reference<S> changedRef, R afterState, boolean existedBefore, boolean existsAfter, MapValue<String> attributes) {
+				this.registration = registration;
+				this.changedRef = changedRef;
+				this.afterState = afterState;
+				this.existedBefore = existedBefore;
+				this.existsAfter = existsAfter;
+				this.attributes = attributes;
+			}
+
+			void run() throws InterruptedException {
+				LocalDriver.this.runHook(registration, changedRef, afterState, attributes);
+			}
 		}
 
 		@Override
@@ -367,7 +389,7 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 				int index = hooks.size();
 				HookRegistration<T> reg = new HookRegistration<>(name, scope, action, index);
 				hooks.add(reg);
-				triggerQueueingOfHooks(rootRef, null, currentState, reg);
+				triggerQueueingOfHooks(rootRef, null, currentState, reg, context.getAttributes());
 			}
 			drainQueueIfAllowed();
 		}
@@ -445,8 +467,9 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 		private <T> void queueHooks(Reference<T> target, @Nullable R priorRoot) {
 			assert holdsLock(this);
 			R rootForHook = currentRoot();
+			MapValue<String> attributes = context.getAttributes();
 			for (HookRegistration<?> reg : hooks) {
-				triggerQueueingOfHooks(target, priorRoot, rootForHook, reg);
+				triggerQueueingOfHooks(target, priorRoot, rootForHook, reg, attributes);
 			}
 		}
 
@@ -456,12 +479,16 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 		 * when <code>target</code> was updated. If <code>priorRoot</code> is null, the hook is called
 		 * on every matching object that exists in <code>rootForHook</code>.
 		 */
-		private <T, S> void triggerQueueingOfHooks(Reference<T> target, @Nullable R priorRoot, R rootForHook, HookRegistration<S> reg) {
-			MapValue<String> attributes = context.getAttributes();
+		private <T, S> void triggerQueueingOfHooks(Reference<T> target, @Nullable R priorRoot, R rootForHook, HookRegistration<S> reg, MapValue<String> attributes) {
 			reg.triggerAction(priorRoot, rootForHook, target, (changedRef, existedBefore, existsAfter) -> {
 				HOOK_LOGGER.debug("Hook: queue {}({}) due to {}", reg.name(), changedRef, target);
-				hookExecutionQueue.addLast(hookTask(reg, changedRef, rootForHook, attributes));
+				enqueueHookExecution(reg, changedRef, rootForHook, existedBefore, existsAfter, attributes);
 			});
+		}
+
+		private <S> void enqueueHookExecution(HookRegistration<S> reg, Reference<S> changedRef, R rootForHook, boolean existedBefore, boolean existsAfter, MapValue<String> attributes) {
+			assert holdsLock(this);
+			hookExecutionQueue.addLast(new HookExecution<>(reg, changedRef, rootForHook, existedBefore, existsAfter, attributes));
 		}
 
 		private <S> Runnable hookTask(HookRegistration<S> reg, Reference<S> changedRef, R rootForHook, MapValue<String> attributes) {
@@ -528,18 +555,24 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 								HOOK_LOGGER.debug("Interrupted; deferring the remaining queued hooks");
 								return;
 							}
-							Runnable ex = hookExecutionQueue.pollFirst();
-							if (ex == null) {
+							HookExecution<?> execution;
+							synchronized (this) {
+								execution = hookExecutionQueue.pollFirst();
+							}
+							if (execution == null) {
 								break;
 							}
-							try {
-								runHookTask(ex);
-							} catch (InterruptedException e) {
-								Thread.currentThread().interrupt();
-								HOOK_LOGGER.warn("Interrupted while running hooks; the running hook was interrupted and terminated, and the remaining queued hooks are deferred to the next update", e);
-								return;
-							}
+							execution.run();
 						}
+					} catch (InterruptedException e) {
+						// The interrupt is intended for the hook work in flight here.
+						// Deliver it to the running hook, per the BoskHook contract,
+						// and await its termination before proceeding. This is intended
+						// to mimic structured concurrency (StructuredTaskScope.close()):
+						// cancel the in-flight subtasks and wait for them to terminate.
+						Thread.currentThread().interrupt();
+						HOOK_LOGGER.warn("Interrupted while running hooks; the running hook was interrupted and terminated, and the remaining queued hooks are deferred to the next update", e);
+						return;
 					} finally {
 						hookExecutionPermit.release();
 					}
@@ -576,7 +609,17 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 				// if another thread queues another hook after this point, that thread will also
 				// succeed in acquiring the permit and will itself drain the queue.
 
-			} while (!hookExecutionQueue.isEmpty());
+			} while (hasQueuedHookExecutions());
+		}
+
+		private boolean hasQueuedHookExecutions() {
+			synchronized (this) {
+				return !hookExecutionQueue.isEmpty();
+			}
+		}
+
+		private <S> void runHook(HookRegistration<S> reg, Reference<S> changedRef, R rootForHook, MapValue<String> attributes) throws InterruptedException {
+			runHookTask(hookTask(reg, changedRef, rootForHook, attributes));
 		}
 
 		private void runHookTask(Runnable work) throws InterruptedException {
