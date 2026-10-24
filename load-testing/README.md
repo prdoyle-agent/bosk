@@ -96,7 +96,9 @@ A larger catalog lowers throughput and raises per-update latency, even without s
 
 ## Slow hooks
 
-A root-scope `BoskHook` that sleeps while multiple workers submit updates. The hook queue is unbounded, and each queued closure captures the state root for that update. With one worker, the submitter drains its own hooks and the run completes. With two or more, the other workers keep submitting and enqueueing while the drainer sleeps, and the queue retains state versions until the heap is exhausted.
+A root-scope `BoskHook` that sleeps while multiple workers submit updates. Before overload mode, each queued execution captured the state root for its update, so a slow hook retained state versions until the heap was exhausted.
+
+### Before overload mode
 
 `simpleDriver`, 1,000 entities, 2 s duration, 256 MB heap, 1 ms hook:
 
@@ -107,7 +109,34 @@ A root-scope `BoskHook` that sleeps while multiple workers submit updates. The h
 | 2 | 1 ms | OutOfMemoryError |
 | 4 | 1 ms | OutOfMemoryError |
 
-The OOM happens before the summary is written, so there is no CSV row; the process exit and `OutOfMemoryError` are the failure signal. This is a retention failure, not a throughput cliff. The one-worker run shows the hook itself is not the problem; two submitters are enough to grow the queue. See #495 for the design options and open questions.
+The one-worker run drained its own hooks and completed. With two or more, the non-draining workers kept submitting while the drainer slept, and the unbounded queue exhausted the heap.
+
+### After overload mode
+
+The same matrix, with the default `hookQueueMaxSize` of 1,000:
+
+| Threads | Hook | Result | Throughput | Heap after |
+|---:|---|---|---:|---:|
+| 4 | none | completed | 2,418,592 ops/s | 44.5 MB |
+| 1 | 1 ms | completed | 703 ops/s | 36.2 MB |
+| 2 | 1 ms | completed | 2,585,855 ops/s | 18.9 MB |
+| 4 | 1 ms | completed | 2,054,262 ops/s | 15.0 MB |
+
+All runs verified the final state. The overload warning appeared in the hook runs. The 1 ms hook still limits a single submitter that drains its own work, but multiple submitters stay fast because their notifications are coalesced.
+
+Further stress results, all with the `simple` driver and 1,000 entities unless noted:
+
+- 8 and 16 threads, 1 ms hook, 10 s: both completed, at about 2.2–2.3 million ops/s, with heap below 37 MB.
+- 4 threads, 10 ms hook, 10 s: completed, at about 2.3 million ops/s, with heap below 19 MB.
+- 4 threads, 100 ms hook, 10 s: completed in about 85 s when given a long enough stall timeout. The hook runs at its serialized limit of 10 calls/s, so the roughly 75 s after the load is about 750 tail calls. With a 10 s stall timeout, the harness reports a stall while that tail drains. This is not inefficient draining or unbounded retention; it is the cost of preserving per-event semantics for the sub-threshold tail. A lower threshold reduces the tail size.
+- 4 threads, 1 ms hook, 32 MB heap, 10 s: completed, with about 13 MB live after the run.
+- 4 threads, 1 ms hook over every entity in a 10,000-entity catalog, 64 MB heap, 10 s: completed, with about 45 MB live after the run.
+- 100 root hooks, 1 ms each, 4 threads, 10 s: completed at about 99,000 ops/s. 1,000 root hooks completed at about 14,000 ops/s. Memory stayed bounded; the cost was serial hook execution.
+- A 60 s hook stalled after the harness timeout, with about 59 MB live. It did not exhaust the heap.
+
+The threshold is the memory bound. With a 64 MB heap, 10,000 and 20,000 queued executions completed; 50,000 reported a stall at a 10 s timeout with about 30 MB live, so that was tail drain rather than OOM; 100,000 exhausted the heap. At 128 MB, 100,000 completed after about 23 s of drain time. At 256 MB, 1,000,000 still exhausted the heap. The default of 1,000 is safe for this workload; configuring a much larger threshold lets the pre-overload queue retain more state.
+
+The warning can repeat while the queue oscillates around the threshold. At a threshold of 10,000, a 2 s run produced over 150 warning lines. The message is accurate, but the repetition is noisy.
 
 ### With Mongo
 
