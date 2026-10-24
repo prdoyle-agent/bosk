@@ -37,7 +37,7 @@ import static works.bosk.drivers.mongo.MongoDriverSettings.InitialDatabaseUnavai
  * harness flushes the driver and verifies the final state against the workload's expectation.
  */
 public final class LoadRunner {
-	private interface Refs {
+	public interface Refs {
 		@ReferencePath("/catalog/-entity-/string")
 		Reference<String> anyEntityString();
 	}
