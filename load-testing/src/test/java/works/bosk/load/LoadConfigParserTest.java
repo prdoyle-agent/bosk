@@ -59,6 +59,9 @@ class LoadConfigParserTest {
 			"--flushEvery=7",
 			"--valueBytes=5",
 			"--hookLatency=1ms",
+			"--hookScope=entity",
+			"--hookCount=3",
+			"--hookQueueMaxSize=17",
 			"--seed=42",
 			"--label=example",
 			"--out=somewhere"
@@ -72,6 +75,9 @@ class LoadConfigParserTest {
 		assertEquals(7, config.flushEvery());
 		assertEquals(5, config.valueBytes());
 		assertEquals(Duration.ofMillis(1), config.hookLatency());
+		assertEquals(HookScope.ENTITY, config.hookScope());
+		assertEquals(3, config.hookCount());
+		assertEquals(17, config.hookQueueMaxSize());
 		assertEquals(42, config.seed());
 		assertEquals("example", config.label());
 		assertEquals(Path.of("somewhere"), config.outputDirectory());

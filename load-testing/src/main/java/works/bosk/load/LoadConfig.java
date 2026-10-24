@@ -22,7 +22,10 @@ import static java.util.Objects.requireNonNull;
  * @param flushMode        when to call {@link works.bosk.BoskDriver#flush()}
  * @param flushEvery       the interval used by {@link FlushMode#EVERY_N}
  * @param valueBytes       the length of the string values written by the workload
- * @param hookLatency      how long a root-scope hook sleeps per invocation; zero disables the hook
+ * @param hookLatency      how long each hook sleeps per invocation; zero disables hooks
+ * @param hookScope        whether each hook is scoped to the root or to every entity's string
+ * @param hookCount        how many hooks to register
+ * @param hookQueueMaxSize the hook queue threshold at which overload mode begins
  * @param seed             reserved for future randomized workloads
  * @param stallTimeout     how long to wait for workers to stop before declaring a stall
  * @param outputDirectory  where the summary and sample CSVs are written
@@ -38,6 +41,9 @@ public record LoadConfig(
 	int flushEvery,
 	int valueBytes,
 	Duration hookLatency,
+	HookScope hookScope,
+	int hookCount,
+	int hookQueueMaxSize,
 	long seed,
 	Duration stallTimeout,
 	Path outputDirectory
@@ -50,6 +56,7 @@ public record LoadConfig(
 		requireNonNull(duration, "duration");
 		requireNonNull(flushMode, "flushMode");
 		requireNonNull(hookLatency, "hookLatency");
+		requireNonNull(hookScope, "hookScope");
 		requireNonNull(stallTimeout, "stallTimeout");
 		requireNonNull(outputDirectory, "outputDirectory");
 		if (entityCount <= 0) {
@@ -76,6 +83,12 @@ public record LoadConfig(
 		if (hookLatency.isNegative()) {
 			throw new IllegalArgumentException("hookLatency must not be negative");
 		}
+		if (hookCount <= 0) {
+			throw new IllegalArgumentException("hookCount must be positive");
+		}
+		if (hookQueueMaxSize <= 0) {
+			throw new IllegalArgumentException("hookQueueMaxSize must be positive");
+		}
 	}
 
 	public static Builder builder() {
@@ -93,6 +106,9 @@ public record LoadConfig(
 		private int flushEvery = 100;
 		private int valueBytes = 16;
 		private Duration hookLatency = Duration.ZERO;
+		private HookScope hookScope = HookScope.ROOT;
+		private int hookCount = 1;
+		private int hookQueueMaxSize = 1000;
 		private long seed = 1L;
 		private Duration stallTimeout = Duration.ofSeconds(60);
 		private Path outputDirectory = Path.of("build", "load-results");
@@ -147,6 +163,21 @@ public record LoadConfig(
 			return this;
 		}
 
+		public Builder hookScope(HookScope hookScope) {
+			this.hookScope = hookScope;
+			return this;
+		}
+
+		public Builder hookCount(int hookCount) {
+			this.hookCount = hookCount;
+			return this;
+		}
+
+		public Builder hookQueueMaxSize(int hookQueueMaxSize) {
+			this.hookQueueMaxSize = hookQueueMaxSize;
+			return this;
+		}
+
 		public Builder seed(long seed) {
 			this.seed = seed;
 			return this;
@@ -174,6 +205,9 @@ public record LoadConfig(
 				flushEvery,
 				valueBytes,
 				hookLatency,
+				hookScope,
+				hookCount,
+				hookQueueMaxSize,
 				seed,
 				stallTimeout,
 				outputDirectory

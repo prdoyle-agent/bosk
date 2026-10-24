@@ -15,6 +15,8 @@ import works.bosk.Bosk;
 import works.bosk.BoskConfig;
 import works.bosk.BoskDriver;
 import works.bosk.DriverFactory;
+import works.bosk.Reference;
+import works.bosk.annotations.ReferencePath;
 import works.bosk.drivers.mongo.BsonSerializer;
 import works.bosk.drivers.mongo.MongoDriver;
 import works.bosk.drivers.mongo.MongoDriverSettings;
@@ -35,6 +37,10 @@ import static works.bosk.drivers.mongo.MongoDriverSettings.InitialDatabaseUnavai
  * harness flushes the driver and verifies the final state against the workload's expectation.
  */
 public final class LoadRunner {
+	private interface Refs {
+		@ReferencePath("/catalog/-entity-/string")
+		Reference<String> anyEntityString();
+	}
 
 	public LoadResult run(LoadConfig config) throws InvalidTypeException, IOException, InterruptedException {
 		if (config.driver().isMongo()) {
@@ -68,9 +74,12 @@ public final class LoadRunner {
 			workload::initialRoot,
 			BoskConfig.<TestEntity>builder()
 				.driverFactory(driverFactory(config, mongo, mongoDriver))
+				.hookQueueMaxSize(config.hookQueueMaxSize())
 				.build());
 		workload.initialize(bosk);
-		registerHook(bosk, config);
+		AtomicBoolean hookActive = new AtomicBoolean(false);
+		registerHooks(bosk, config, hookActive);
+		hookActive.set(true);
 		BoskDriver driver = bosk.driver();
 
 		CountDownLatch start = new CountDownLatch(1);
@@ -290,10 +299,27 @@ public final class LoadRunner {
 		return LatencySummary.of(merged);
 	}
 
-	private static void registerHook(Bosk<TestEntity> bosk, LoadConfig config) {
-		if (!config.hookLatency().isZero()) {
-			bosk.hookRegistrar().registerHook("load-hook", bosk.rootReference(),
-				_ -> Thread.sleep(config.hookLatency()));
+	private static void registerHooks(Bosk<TestEntity> bosk, LoadConfig config, AtomicBoolean hookActive) throws InvalidTypeException {
+		if (config.hookLatency().isZero()) {
+			return;
+		}
+		if (config.hookScope() == HookScope.ROOT) {
+			for (int i = 0; i < config.hookCount(); i++) {
+				bosk.hookRegistrar().registerHook("load-hook-" + i, bosk.rootReference(),
+					_ -> sleepIfActive(hookActive, config));
+			}
+		} else {
+			Reference<String> scope = bosk.buildReferences(Refs.class).anyEntityString();
+			for (int i = 0; i < config.hookCount(); i++) {
+				bosk.hookRegistrar().registerHook("load-hook-" + i, scope,
+					_ -> sleepIfActive(hookActive, config));
+			}
+		}
+	}
+
+	private static void sleepIfActive(AtomicBoolean hookActive, LoadConfig config) throws InterruptedException {
+		if (hookActive.get()) {
+			Thread.sleep(config.hookLatency());
 		}
 	}
 

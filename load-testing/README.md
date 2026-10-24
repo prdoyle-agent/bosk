@@ -42,7 +42,10 @@ Options:
 | `--flush` | `everyOp` | `everyOp`, `everyN`, or `end` |
 | `--flushEvery` | `100` | Flush interval for `everyN` |
 | `--valueBytes` | `16` | Length of the string values written by the workload |
-| `--hookLatency` | `0ms` | Sleep time for a root-scope hook; zero disables it |
+| `--hookLatency` | `0ms` | Sleep time for each hook; zero disables hooks |
+| `--hookScope` | `root` | Hook scope: `root` or `entity` |
+| `--hookCount` | `1` | Number of hooks to register |
+| `--hookQueueMaxSize` | `1000` | Hook queue threshold at which overload mode begins |
 | `--stallTimeout` | `60s` | How long to wait for workers to stop before dumping threads |
 | `--label` | empty | Label included in the output |
 | `--out` | `build/load-results` | Output directory |
