@@ -172,7 +172,7 @@ public class OverloadModeTest extends AbstractBoskTest {
 	}
 
 	@Test
-	void subThresholdTailKeepsStandardSemantics() throws InterruptedException, InvalidTypeException {
+	void firstSmallBatchIsCoalescedAndSecondIsStandard() throws InterruptedException, InvalidTypeException {
 		Bosk<TestRoot> tailBosk = new Bosk<>(
 			"overload-tail-test",
 			TestRoot.class,
@@ -193,10 +193,19 @@ public class OverloadModeTest extends AbstractBoskTest {
 				}
 			});
 		}
+		CountDownLatch firstBCallStarted = new CountDownLatch(1);
+		CountDownLatch releaseFirstBCall = new CountDownLatch(1);
+		AtomicBoolean blockB = new AtomicBoolean(false);
 		List<String> hookBSeen = new CopyOnWriteArrayList<>();
-		tailBosk.hookRegistrar().registerHook("B", tailRefs.childString(existingChildID), ref ->
-			hookBSeen.add(ref.valueIfExists()));
+		tailBosk.hookRegistrar().registerHook("B", tailRefs.childString(existingChildID), ref -> {
+			hookBSeen.add(ref.valueIfExists());
+			if (blockB.get() && hookBSeen.size() == 1) {
+				firstBCallStarted.countDown();
+				releaseFirstBCall.await();
+			}
+		});
 		hookBSeen.clear();
+		blockB.set(true);
 
 		Thread creator = new Thread(() -> tailBosk.driver().submitConditionalCreation(
 			tailRefs.child(newChildID),
@@ -208,10 +217,93 @@ public class OverloadModeTest extends AbstractBoskTest {
 		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v3");
 		releaseFirstHook.countDown();
 
+		assertTrue(firstBCallStarted.await(10, SECONDS), "The first small batch should run");
+		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v4");
+		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v5");
+		releaseFirstBCall.countDown();
+
 		creator.join(10_000);
 		assertFalse(creator.isAlive(), "The creating thread should finish");
 		assertEquals(3, hookACalls.get(), "The initial overload batch should run all three hooks");
-		assertEquals(List.of("v2", "v3"), hookBSeen, "A sub-threshold tail should be drained in standard mode");
+		assertEquals(List.of("v3", "v4", "v5"), hookBSeen,
+			"The first small batch should be coalesced; the second should be standard");
+	}
+
+	@Test
+	void overflowDuringSmallBatchResetsTheExitCount() throws InterruptedException, InvalidTypeException {
+		Bosk<TestRoot> tailBosk = new Bosk<>(
+			"overload-reset-test",
+			TestRoot.class,
+			AbstractBoskTest::initialState,
+			BoskConfig.<TestRoot>builder().hookQueueMaxSize(3).build());
+		Refs tailRefs = tailBosk.rootReference().buildReferences(Refs.class);
+
+		Identifier newChildID = Identifier.from("newChild");
+		Identifier existingChildID = Identifier.from("child1");
+		CountDownLatch firstHookStarted = new CountDownLatch(1);
+		CountDownLatch releaseFirstHook = new CountDownLatch(1);
+		AtomicInteger hookACalls = new AtomicInteger();
+		for (int i = 0; i < 3; i++) {
+			tailBosk.hookRegistrar().registerHook("A" + i, tailRefs.childString(newChildID), ref -> {
+				if (hookACalls.getAndIncrement() == 0) {
+					firstHookStarted.countDown();
+					releaseFirstHook.await();
+				}
+			});
+		}
+		CountDownLatch firstBCallStarted = new CountDownLatch(1);
+		CountDownLatch secondBCallStarted = new CountDownLatch(1);
+		CountDownLatch releaseFirstBCall = new CountDownLatch(1);
+		CountDownLatch releaseSecondBCall = new CountDownLatch(1);
+		AtomicBoolean blockB = new AtomicBoolean(false);
+		AtomicInteger bCalls = new AtomicInteger();
+		List<String> hookBSeen = new CopyOnWriteArrayList<>();
+		tailBosk.hookRegistrar().registerHook("B", tailRefs.childString(existingChildID), ref -> {
+			hookBSeen.add(ref.valueIfExists());
+			switch (bCalls.getAndIncrement()) {
+				case 0 -> {
+					if (blockB.get()) {
+						firstBCallStarted.countDown();
+						releaseFirstBCall.await();
+					}
+				}
+				case 1 -> {
+					secondBCallStarted.countDown();
+					releaseSecondBCall.await();
+				}
+				default -> {
+				}
+			}
+		});
+		hookBSeen.clear();
+		bCalls.set(0);
+		blockB.set(true);
+
+		Thread creator = new Thread(() -> tailBosk.driver().submitConditionalCreation(
+			tailRefs.child(newChildID),
+			new TestChild(newChildID, "a", TestEnum.OK, Catalog.empty())));
+		creator.start();
+
+		assertTrue(firstHookStarted.await(10, SECONDS), "The first overload hook should start");
+		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v2");
+		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v3");
+		releaseFirstHook.countDown();
+
+		assertTrue(firstBCallStarted.await(10, SECONDS), "The first small batch should run");
+		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v4");
+		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v5");
+		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v6");
+		releaseFirstBCall.countDown();
+
+		assertTrue(secondBCallStarted.await(10, SECONDS), "The overflow batch should run");
+		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v7");
+		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v8");
+		releaseSecondBCall.countDown();
+
+		creator.join(10_000);
+		assertFalse(creator.isAlive(), "The creating thread should finish");
+		assertEquals(List.of("v3", "v6", "v8"), hookBSeen,
+			"Overflow should reset the count so the next small batch is coalesced");
 	}
 
 	@Test

@@ -258,7 +258,8 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 	 * hooks run against a later snapshot, and updates caused by hooks are handled
 	 * in subsequent catch-up batches. The update-ordering and sequential-hook
 	 * guarantees above still apply; the breadth-first per-event ordering describes
-	 * normal mode.
+	 * normal mode. Overload mode ends only after two consecutive undersized queues,
+	 * so a single quiet interval does not immediately return the driver to normal mode.
 	 *
 	 * <p>
 	 * Satisfying all of these simultaneously is tricky, especially because we can't just put
@@ -276,6 +277,7 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 		final Semaphore hookExecutionPermit = new Semaphore(1);
 		final OverloadPendingSet overloadPending = new OverloadPendingSet();
 		volatile boolean overloadMode;
+		int consecutiveSmallBatches;
 
 		public LocalDriver(Bosk.DefaultStateFunction<R> initialStateFunction) {
 			this.initialStateFunction = initialStateFunction;
@@ -503,17 +505,27 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 			assert holdsLock(this);
 			hookExecutionQueue.addLast(new HookExecution<>(reg, changedRef, rootForHook, existedBefore, existsAfter, diagnosticAttributes));
 			if (hookExecutionQueue.size() >= hookQueueMaxSize) {
-				collapseHookExecutionQueue();
+				ensureOverloadMode();
 			}
+		}
+
+		/**
+		 * Ensures overload mode is active and collapses the current standard queue
+		 * into the pending set.
+		 */
+		private void ensureOverloadMode() {
+			assert holdsLock(this);
+			boolean wasInStandardMode = !overloadMode;
+			overloadMode = true;
+			consecutiveSmallBatches = 0;
+			if (wasInStandardMode) {
+				HOOK_LOGGER.warn("Hook execution queue has exceeded limit ({}); entering overload mode", hookQueueMaxSize);
+			}
+			collapseHookExecutionQueue();
 		}
 
 		private void collapseHookExecutionQueue() {
 			assert holdsLock(this);
-			boolean enteringOverloadMode = !overloadMode;
-			overloadMode = true;
-			if (enteringOverloadMode) {
-				HOOK_LOGGER.warn("Hook execution queue has exceeded limit ({}); entering overload mode", hookQueueMaxSize);
-			}
 			for (HookExecution<?> execution; (execution = hookExecutionQueue.pollFirst()) != null; ) {
 				overloadPending.add(
 					execution.registration.index(),
@@ -663,9 +675,24 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 			R snapshot;
 			synchronized (this) {
 				if (overloadPending.isEmpty()) {
-					overloadMode = false;
-					HOOK_LOGGER.info("Hook backlog drained; leaving overload mode");
-					return false;
+					int queueSize = hookExecutionQueue.size();
+					if (queueSize <= 1) {
+						// With at most one queued execution there is nothing to coalesce.
+						leaveOverloadMode();
+						return false;
+					}
+					if (queueSize >= hookQueueMaxSize) {
+						ensureOverloadMode();
+					} else {
+						consecutiveSmallBatches++;
+						if (consecutiveSmallBatches >= OVERLOAD_EXIT_CONSECUTIVE_SMALL_BATCHES) {
+							leaveOverloadMode();
+							return false;
+						}
+						collapseHookExecutionQueue();
+					}
+				} else {
+					consecutiveSmallBatches = 0;
 				}
 				batch = overloadPending.detach();
 				snapshot = currentRoot();
@@ -680,10 +707,18 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 			return true;
 		}
 
+		private void leaveOverloadMode() {
+			assert holdsLock(this);
+			overloadMode = false;
+			consecutiveSmallBatches = 0;
+			HOOK_LOGGER.info("Hook backlog returned to normal; leaving overload mode");
+		}
+
 		private void requeueOverloadBatch(Map<Path, PendingHooks> batch) {
 			synchronized (this) {
 				overloadPending.merge(batch);
 				overloadMode = true;
+				consecutiveSmallBatches = 0;
 			}
 		}
 
@@ -1325,6 +1360,7 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 		return newReadSession(snapshot);
 	}
 
+	private static final int OVERLOAD_EXIT_CONSECUTIVE_SMALL_BATCHES = 2;
 	private static final Logger LOGGER = LoggerFactory.getLogger(Bosk.class);
 	// Referencing Bosk.HOOK_LOGGER_NAME here would trigger Bosk's static initialization
 	// while BoskBase is still initializing, so derive the name from the class literal instead.

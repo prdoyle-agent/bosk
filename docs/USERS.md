@@ -603,6 +603,12 @@ A value that changes and changes back may still cause one call.
 The default limit is 1000.
 It can be changed with `BoskConfig.builder().hookQueueMaxSize(...)`.
 Before the limit is reached, the queue still holds one execution per update, so the limit is also a memory bound; raising it allows more state snapshots to accumulate before coalescing.
+
+Once overload mode begins, Bosk returns to standard mode only after two consecutive queues below the limit.
+The first undersized queue is coalesced as a final catch-up; the second is delivered in standard mode.
+An overflow between them resets the count.
+If the queue has at most one execution, there is nothing to coalesce, so Bosk returns to standard mode immediately.
+
 A hook that must observe every intermediate update cannot use overload mode safely; that requires a separate delivery policy.
 
 #### Breadth-first ordering
@@ -946,19 +952,6 @@ The code will have the details, but some high-level points about the BSON format
 For Pando, the situation is similar, except that instead of having a single document with an `_id` of `boskDocument`,
 there are multiple documents with `_id` values that start with `|` (vertical bar)
 and that describe where the document fits within the overall BSON structure.
-
-When choosing a format, the current trade-off is:
-
-- _Sequoia_ is limited to 16MB of state. Each update is a single atomic document write.
-  Concurrent writers contend on that document, but MongoDB does not abort their updates,
-  so Sequoia has higher concurrent write throughput in current testing.
-- _Pando_ with graft points supports states larger than 16MB.
-  Each update is a multi-document transaction that also updates the root revision document
-  shared by all writers, so concurrent writers can hit transaction write conflicts.
-  It is currently best suited to lower write rates or a single writer.
-
-If your state fits within 16MB, prefer Sequoia.
-Choose Pando with graft points only when you need the larger capacity.
 
 `MongoDriver` is designed to tolerate some amount of manual intervention in the database by an operator.
 If something has gone wrong and you need to do an emergency repair,
