@@ -6,7 +6,9 @@ import static java.util.Objects.requireNonNull;
  * @param driverFactory      the factory used to build the driver stack
  * @param registrarFactory   the factory used to build the hook registrar
  * @param hookQueueMaxSize   the maximum number of queued hook executions before the local driver
- *                           switches to overload mode; defaults to 1000
+ *                           switches to overload mode; defaults to 1000. Raising the limit allows
+ *                           more state snapshots to accumulate before coalescing, so it also raises
+ *                           the queue's memory bound.
  */
 public record BoskConfig<R extends StateTreeNode> (
 	DriverFactory<R> driverFactory,

@@ -602,6 +602,7 @@ A value that changes and changes back may still cause one call.
 
 The default limit is 1000.
 It can be changed with `BoskConfig.builder().hookQueueMaxSize(...)`.
+Before the limit is reached, the queue still holds one execution per update, so the limit is also a memory bound; raising it allows more state snapshots to accumulate before coalescing.
 A hook that must observe every intermediate update cannot use overload mode safely; that requires a separate delivery policy.
 
 #### Breadth-first ordering
