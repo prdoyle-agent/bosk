@@ -512,7 +512,7 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 			boolean enteringOverloadMode = !overloadMode;
 			overloadMode = true;
 			if (enteringOverloadMode) {
-				HOOK_LOGGER.warn("Hook queue reached {} executions; entering overload mode", hookQueueMaxSize);
+				HOOK_LOGGER.warn("Hook execution queue has exceeded limit ({}); entering overload mode", hookQueueMaxSize);
 			}
 			for (HookExecution<?> execution; (execution = hookExecutionQueue.pollFirst()) != null; ) {
 				overloadPending.add(
