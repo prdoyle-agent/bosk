@@ -32,6 +32,7 @@ import works.bosk.util.Classes;
 import static java.lang.Thread.holdsLock;
 import static java.util.Objects.requireNonNull;
 import static java.util.UUID.randomUUID;
+import static works.bosk.OverloadController.Mode.PROBATION;
 import static works.bosk.OverloadPendingSet.PendingHooks;
 import static works.bosk.Path.parameterNameFromSegment;
 import static works.bosk.ReferenceUtils.rawClass;
@@ -509,16 +510,22 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 		private <S> void enqueueHookExecution(HookRegistration<S> reg, Reference<S> changedRef, R rootForHook, boolean existedBefore, boolean existsAfter, MapValue<String> diagnosticAttributes) {
 			assert holdsLock(this);
 			hookExecutionQueue.addLast(new HookExecution<>(reg, changedRef, rootForHook, existedBefore, existsAfter, diagnosticAttributes));
-			if (overloadController.mode() == OverloadController.Mode.PROBATION) {
-				// A trial fails as soon as the backlog grows beyond the exit threshold.
-				if (hookExecutionQueue.size() > overloadController.lowWaterMark()) {
-					probationFailed();
+			switch (overloadController.mode()) {
+				case PROBATION -> {
+					// A trial fails as soon as the backlog grows beyond the exit threshold.
+					if (hookExecutionQueue.size() > overloadController.backlogThreshold()) {
+						probationFailed();
+					}
 				}
-			} else if (hookExecutionQueue.size() >= hookQueueMaxSize) {
-				if (overloadController.mode() == OverloadController.Mode.STANDARD) {
-					enterOverloadMode();
-				} else {
-					collapseHookExecutionQueue();
+				case STANDARD -> {
+					if (hookExecutionQueue.size() >= hookQueueMaxSize) {
+						enterOverloadMode();
+					}
+				}
+				case OVERLOAD -> {
+					if (hookExecutionQueue.size() >= hookQueueMaxSize) {
+						collapseHookExecutionQueue();
+					}
 				}
 			}
 		}
@@ -602,6 +609,7 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 			do {
 				if (hookExecutionPermit.tryAcquire()) {
 					try {
+						drain:
 						while (true) {
 							// An interrupt means "stop"; quit before starting another hook,
 							// leaving the remaining queued hooks for a later update.
@@ -609,25 +617,27 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 								HOOK_LOGGER.debug("Interrupted; deferring the remaining queued hooks");
 								return;
 							}
-							if (overloadController.mode() == OverloadController.Mode.OVERLOAD) {
-								OverloadBatchResult result = runOverloadBatch();
-								if (result == OverloadBatchResult.IDLE) {
-									break;
+							switch (overloadController.mode()) {
+								case OVERLOAD -> {
+									if (runOverloadBatch() == OverloadBatchResult.IDLE) {
+										break drain;
+									}
 								}
-							} else {
-								HookExecution<?> execution;
-								synchronized (this) {
-									execution = hookExecutionQueue.pollFirst();
-								}
-								if (execution == null) {
-									break;
-								}
-								execution.run();
-								if (overloadController.mode() == OverloadController.Mode.PROBATION) {
+								case STANDARD, PROBATION -> {
+									HookExecution<?> execution;
 									synchronized (this) {
-										if (overloadController.mode() == OverloadController.Mode.PROBATION) {
-											if (overloadController.recordProbationExecution()) {
-												HOOK_LOGGER.info("Hook backlog returned to normal; leaving overload mode");
+										execution = hookExecutionQueue.pollFirst();
+									}
+									if (execution == null) {
+										break drain;
+									}
+									execution.run();
+									if (overloadController.mode() == PROBATION) {
+										synchronized (this) {
+											if (overloadController.mode() == PROBATION) {
+												if (overloadController.recordProbationExecution()) {
+													HOOK_LOGGER.info("Hook backlog returned to normal; leaving overload mode");
+												}
 											}
 										}
 									}
@@ -700,7 +710,7 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 			synchronized (this) {
 				if (overloadPending.isEmpty()) {
 					int backlog = backlog();
-					if (overloadController.observeBacklog(backlog) == OverloadController.OverloadDecision.START_PROBATION) {
+					if (overloadController.observeBacklog(backlog)) {
 						HOOK_LOGGER.debug("Hook backlog is low; trying standard mode");
 						return OverloadBatchResult.STARTED_PROBATION;
 					}

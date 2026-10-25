@@ -17,11 +17,6 @@ final class OverloadController {
 		PROBATION
 	}
 
-	enum OverloadDecision {
-		CONTINUE,
-		START_PROBATION
-	}
-
 	private final int queueMaxSize;
 	private final int exitThreshold;
 
@@ -42,19 +37,19 @@ final class OverloadController {
 		return mode;
 	}
 
-	int lowWaterMark() {
+	int backlogThreshold() {
 		return Math.min(queueMaxSize, Math.max(1, exitThreshold));
 	}
 
-	int requiredQuietGenerations() {
+	synchronized int requiredQuietGenerations() {
 		return requiredQuietGenerations;
 	}
 
-	int probationRemaining() {
+	synchronized int probationRemaining() {
 		return probationRemaining;
 	}
 
-	void enterOverload() {
+	synchronized void enterOverload() {
 		assert mode == Mode.STANDARD : "Can only enter overload mode from standard mode";
 		mode = Mode.OVERLOAD;
 		lowBacklogStreak = 0;
@@ -66,7 +61,7 @@ final class OverloadController {
 	 * Records an overload generation that still had pending work, so it does
 	 * not count as evidence that the backlog has drained.
 	 */
-	void recordBusyGeneration() {
+	synchronized void recordBusyGeneration() {
 		assert mode == Mode.OVERLOAD : "Busy generations only occur in overload mode";
 		lowBacklogStreak = 0;
 	}
@@ -75,21 +70,22 @@ final class OverloadController {
 	 * Records the backlog at a generation boundary.
 	 *
 	 * @param backlog queued hook executions plus pending hook notifications
+	 * @return true if the driver should start a standard-mode trial
 	 */
-	OverloadDecision observeBacklog(int backlog) {
+	synchronized boolean observeBacklog(int backlog) {
 		assert mode == Mode.OVERLOAD : "Backlog observations only occur in overload mode";
-		if (backlog <= lowWaterMark()) {
+		if (backlog <= backlogThreshold()) {
 			lowBacklogStreak++;
 			if (lowBacklogStreak >= requiredQuietGenerations) {
 				mode = Mode.PROBATION;
 				probationRemaining = Math.max(1, queueMaxSize);
 				lowBacklogStreak = 0;
-				return OverloadDecision.START_PROBATION;
+				return true;
 			}
 		} else {
 			lowBacklogStreak = 0;
 		}
-		return OverloadDecision.CONTINUE;
+		return false;
 	}
 
 	/**
@@ -97,7 +93,7 @@ final class OverloadController {
 	 *
 	 * @return true if the trial completed successfully
 	 */
-	boolean recordProbationExecution() {
+	synchronized boolean recordProbationExecution() {
 		assert mode == Mode.PROBATION : "Probation executions only occur in probation mode";
 		probationRemaining--;
 		if (probationRemaining <= 0) {
@@ -113,7 +109,7 @@ final class OverloadController {
 	/**
 	 * Abandons a standard-mode trial because the queue overflowed.
 	 */
-	void failProbation() {
+	synchronized void failProbation() {
 		assert mode == Mode.PROBATION : "Can only fail a trial while in probation mode";
 		mode = Mode.OVERLOAD;
 		lowBacklogStreak = 0;
@@ -124,11 +120,11 @@ final class OverloadController {
 	 * Returns to overload mode after an interrupted batch. Any backoff already
 	 * accumulated is preserved.
 	 */
-	void returnToOverload() {
+	synchronized void returnToOverload() {
 		mode = Mode.OVERLOAD;
 		lowBacklogStreak = 0;
 		probationRemaining = 0;
 	}
 
-	private static final int MAX_REQUIRED_QUIET_GENERATIONS = 1024;
+	private static final int MAX_REQUIRED_QUIET_GENERATIONS = 1000;
 }
