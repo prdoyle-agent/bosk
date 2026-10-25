@@ -607,6 +607,7 @@ Before the limit is reached, the queue still holds one execution per update, so 
 Once overload mode begins, Bosk periodically runs a bounded probation in standard style when the pending set has drained and the queue has work.
 The probation lasts for at most `min(hookQueueMaxSize, 64)` hook executions initially, with a minimum of one.
 It succeeds only if at least half of its starting backlog has drained by the end; otherwise Bosk returns to overload mode.
+After a small minimum sample, Bosk also aborts the probation if the backlog has not decreased at all.
 The queue limit remains the hard memory bound, and reaching it during probation fails the probation immediately.
 
 A successful probation is followed by one final overload-mode catch-up generation, which coalesces the remaining backlog before standard mode resumes.
