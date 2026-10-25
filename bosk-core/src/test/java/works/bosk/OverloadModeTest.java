@@ -4,7 +4,6 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,6 +16,9 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static works.bosk.OverloadController.Mode.OVERLOAD;
+import static works.bosk.OverloadController.Mode.PROBATION;
+import static works.bosk.OverloadController.Mode.STANDARD;
 
 public class OverloadModeTest extends AbstractBoskTest {
 	public interface Refs {
@@ -172,138 +174,78 @@ public class OverloadModeTest extends AbstractBoskTest {
 	}
 
 	@Test
-	void firstSmallBatchIsCoalescedAndSecondIsStandard() throws InterruptedException, InvalidTypeException {
-		Bosk<TestRoot> tailBosk = new Bosk<>(
-			"overload-tail-test",
+	void quietBacklogStartsProbationThenCommitsToStandard() throws InterruptedException, InvalidTypeException {
+		Bosk<TestRoot> trialBosk = new Bosk<>(
+			"overload-probation-test",
 			TestRoot.class,
 			AbstractBoskTest::initialState,
 			BoskConfig.<TestRoot>builder().hookQueueMaxSize(3).build());
-		Refs tailRefs = tailBosk.rootReference().buildReferences(Refs.class);
+		Refs trialRefs = trialBosk.rootReference().buildReferences(Refs.class);
+		Reference<String> stringRef = trialRefs.childString(Identifier.from("child1"));
 
-		Identifier newChildID = Identifier.from("newChild");
-		Identifier existingChildID = Identifier.from("child1");
-		CountDownLatch firstHookStarted = new CountDownLatch(1);
-		CountDownLatch releaseFirstHook = new CountDownLatch(1);
-		AtomicInteger hookACalls = new AtomicInteger();
-		for (int i = 0; i < 3; i++) {
-			tailBosk.hookRegistrar().registerHook("A" + i, tailRefs.childString(newChildID), ref -> {
-				if (hookACalls.getAndIncrement() == 0) {
-					firstHookStarted.countDown();
-					releaseFirstHook.await();
-				}
-			});
-		}
-		CountDownLatch firstBCallStarted = new CountDownLatch(1);
-		CountDownLatch releaseFirstBCall = new CountDownLatch(1);
-		AtomicBoolean blockB = new AtomicBoolean(false);
-		List<String> hookBSeen = new CopyOnWriteArrayList<>();
-		tailBosk.hookRegistrar().registerHook("B", tailRefs.childString(existingChildID), ref -> {
-			hookBSeen.add(ref.valueIfExists());
-			if (blockB.get() && hookBSeen.size() == 1) {
-				firstBCallStarted.countDown();
-				releaseFirstBCall.await();
-			}
-		});
-		hookBSeen.clear();
-		blockB.set(true);
+		BlockingHook hook = new BlockingHook();
+		trialBosk.hookRegistrar().registerHook("string", stringRef, hook);
+		hook.seen.clear();
 
-		Thread creator = new Thread(() -> tailBosk.driver().submitConditionalCreation(
-			tailRefs.child(newChildID),
-			new TestChild(newChildID, "a", TestEnum.OK, Catalog.empty())));
-		creator.start();
+		hook.blockNext();
+		Thread updater = new Thread(() -> trialBosk.driver().submitReplacement(stringRef, "v1"));
+		updater.start();
+		hook.awaitStarted();
 
-		assertTrue(firstHookStarted.await(10, SECONDS), "The first overload hook should start");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v2");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v3");
-		releaseFirstHook.countDown();
+		trialBosk.driver().submitReplacement(stringRef, "v2");
+		trialBosk.driver().submitReplacement(stringRef, "v3");
+		trialBosk.driver().submitReplacement(stringRef, "v4");
 
-		assertTrue(firstBCallStarted.await(10, SECONDS), "The first small batch should run");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v4");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v5");
-		releaseFirstBCall.countDown();
+		hook.unblock();
+		updater.join(10_000);
+		assertFalse(updater.isAlive(), "The updating thread should finish");
+		assertEquals(List.of("v1", "v4"), hook.seen, "The overload batch should report only the latest state");
+		assertEquals(PROBATION, trialBosk.hookMode(), "A quiet backlog should start a standard-mode trial");
 
-		creator.join(10_000);
-		assertFalse(creator.isAlive(), "The creating thread should finish");
-		assertEquals(3, hookACalls.get(), "The initial overload batch should run all three hooks");
-		assertEquals(List.of("v3", "v4", "v5"), hookBSeen,
-			"The first small batch should be coalesced; the second should be standard");
+		trialBosk.driver().submitReplacement(stringRef, "v5");
+		trialBosk.driver().submitReplacement(stringRef, "v6");
+		trialBosk.driver().submitReplacement(stringRef, "v7");
+
+		assertEquals(STANDARD, trialBosk.hookMode(), "A completed trial should commit to standard mode");
+		assertEquals(List.of("v1", "v4", "v5", "v6", "v7"), hook.seen,
+			"The trial should deliver each remaining update separately");
 	}
 
 	@Test
-	void overflowDuringSmallBatchResetsTheExitCount() throws InterruptedException, InvalidTypeException {
-		Bosk<TestRoot> tailBosk = new Bosk<>(
-			"overload-reset-test",
+	void probationOverflowReturnsToOverload() throws InterruptedException, InvalidTypeException {
+		Bosk<TestRoot> trialBosk = new Bosk<>(
+			"overload-probation-failure-test",
 			TestRoot.class,
 			AbstractBoskTest::initialState,
 			BoskConfig.<TestRoot>builder().hookQueueMaxSize(3).build());
-		Refs tailRefs = tailBosk.rootReference().buildReferences(Refs.class);
+		Refs trialRefs = trialBosk.rootReference().buildReferences(Refs.class);
+		Reference<String> stringRef = trialRefs.childString(Identifier.from("child1"));
 
-		Identifier newChildID = Identifier.from("newChild");
-		Identifier existingChildID = Identifier.from("child1");
-		CountDownLatch firstHookStarted = new CountDownLatch(1);
-		CountDownLatch releaseFirstHook = new CountDownLatch(1);
-		AtomicInteger hookACalls = new AtomicInteger();
-		for (int i = 0; i < 3; i++) {
-			tailBosk.hookRegistrar().registerHook("A" + i, tailRefs.childString(newChildID), ref -> {
-				if (hookACalls.getAndIncrement() == 0) {
-					firstHookStarted.countDown();
-					releaseFirstHook.await();
-				}
-			});
-		}
-		CountDownLatch firstBCallStarted = new CountDownLatch(1);
-		CountDownLatch secondBCallStarted = new CountDownLatch(1);
-		CountDownLatch releaseFirstBCall = new CountDownLatch(1);
-		CountDownLatch releaseSecondBCall = new CountDownLatch(1);
-		AtomicBoolean blockB = new AtomicBoolean(false);
-		AtomicInteger bCalls = new AtomicInteger();
-		List<String> hookBSeen = new CopyOnWriteArrayList<>();
-		tailBosk.hookRegistrar().registerHook("B", tailRefs.childString(existingChildID), ref -> {
-			hookBSeen.add(ref.valueIfExists());
-			switch (bCalls.getAndIncrement()) {
-				case 0 -> {
-					if (blockB.get()) {
-						firstBCallStarted.countDown();
-						releaseFirstBCall.await();
-					}
-				}
-				case 1 -> {
-					secondBCallStarted.countDown();
-					releaseSecondBCall.await();
-				}
-				default -> {
-				}
-			}
-		});
-		hookBSeen.clear();
-		bCalls.set(0);
-		blockB.set(true);
+		BlockingHook hook = new BlockingHook();
+		trialBosk.hookRegistrar().registerHook("string", stringRef, hook);
+		hook.seen.clear();
 
-		Thread creator = new Thread(() -> tailBosk.driver().submitConditionalCreation(
-			tailRefs.child(newChildID),
-			new TestChild(newChildID, "a", TestEnum.OK, Catalog.empty())));
-		creator.start();
+		startOverloadAndDrainToProbation(trialBosk, stringRef, hook);
+		assertEquals(PROBATION, trialBosk.hookMode(), "The quiet backlog should start a trial");
 
-		assertTrue(firstHookStarted.await(10, SECONDS), "The first overload hook should start");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v2");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v3");
-		releaseFirstHook.countDown();
+		hook.blockNext();
+		Thread updater = new Thread(() -> trialBosk.driver().submitReplacement(stringRef, "v8"));
+		updater.start();
+		hook.awaitStarted();
 
-		assertTrue(firstBCallStarted.await(10, SECONDS), "The first small batch should run");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v4");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v5");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v6");
-		releaseFirstBCall.countDown();
+		trialBosk.driver().submitReplacement(stringRef, "v9");
+		trialBosk.driver().submitReplacement(stringRef, "v10");
+		trialBosk.driver().submitReplacement(stringRef, "v11");
+		trialBosk.driver().submitReplacement(stringRef, "v12");
 
-		assertTrue(secondBCallStarted.await(10, SECONDS), "The overflow batch should run");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v7");
-		tailBosk.driver().submitReplacement(tailRefs.childString(existingChildID), "v8");
-		releaseSecondBCall.countDown();
+		assertEquals(OVERLOAD, trialBosk.hookMode(), "Overflowing during a trial should return to overload mode");
 
-		creator.join(10_000);
-		assertFalse(creator.isAlive(), "The creating thread should finish");
-		assertEquals(List.of("v3", "v6", "v8"), hookBSeen,
-			"Overflow should reset the count so the next small batch is coalesced");
+		hook.unblock();
+		updater.join(10_000);
+		assertFalse(updater.isAlive(), "The updating thread should finish");
+		assertEquals(List.of("v1", "v4", "v8", "v12"), hook.seen,
+			"The failed trial should coalesce the queued updates into the latest state");
+		assertEquals(OVERLOAD, trialBosk.hookMode(), "A failed trial should stay in overload mode");
 	}
 
 	@Test
@@ -336,5 +278,51 @@ public class OverloadModeTest extends AbstractBoskTest {
 		bosk.driver().submitReplacement(stringRef, "afterInterrupt");
 
 		assertTrue(secondHookRan.await(10, SECONDS), "The unrun hook should be requeued and run later");
+	}
+
+	private static void startOverloadAndDrainToProbation(Bosk<TestRoot> bosk, Reference<String> stringRef, BlockingHook hook) throws InterruptedException {
+		hook.blockNext();
+		Thread updater = new Thread(() -> bosk.driver().submitReplacement(stringRef, "v1"));
+		updater.start();
+		hook.awaitStarted();
+
+		bosk.driver().submitReplacement(stringRef, "v2");
+		bosk.driver().submitReplacement(stringRef, "v3");
+		bosk.driver().submitReplacement(stringRef, "v4");
+
+		hook.unblock();
+		updater.join(10_000);
+		assertFalse(updater.isAlive(), "The updating thread should finish");
+		assertEquals(List.of("v1", "v4"), hook.seen, "The overload batch should report only the latest state");
+	}
+
+	private static final class BlockingHook implements BoskHook<String> {
+		final List<String> seen = new CopyOnWriteArrayList<>();
+		final AtomicBoolean blocking = new AtomicBoolean(false);
+		volatile CountDownLatch started;
+		volatile CountDownLatch release;
+
+		void blockNext() {
+			started = new CountDownLatch(1);
+			release = new CountDownLatch(1);
+			blocking.set(true);
+		}
+
+		void awaitStarted() throws InterruptedException {
+			assertTrue(started.await(10, SECONDS), "The blocking hook should start");
+		}
+
+		void unblock() {
+			release.countDown();
+		}
+
+		@Override
+		public void onChanged(Reference<String> reference) throws InterruptedException {
+			seen.add(reference.valueIfExists());
+			if (blocking.compareAndSet(true, false)) {
+				started.countDown();
+				release.await();
+			}
+		}
 	}
 }

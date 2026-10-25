@@ -604,10 +604,16 @@ The default limit is 1000.
 It can be changed with `BoskConfig.builder().hookQueueMaxSize(...)`.
 Before the limit is reached, the queue still holds one execution per update, so the limit is also a memory bound; raising it allows more state snapshots to accumulate before coalescing.
 
-Once overload mode begins, Bosk returns to standard mode only after two consecutive queues below the limit.
-The first undersized queue is coalesced as a final catch-up; the second is delivered in standard mode.
-An overflow between them resets the count.
-If the queue has at most one execution, there is nothing to coalesce, so Bosk returns to standard mode immediately.
+Once overload mode begins, Bosk waits for the combined queued and pending backlog to remain below a low-water threshold,
+then runs a bounded trial of standard mode.
+It returns to standard mode only if that trial completes without the queue reaching the limit.
+A failed trial returns to overload mode and increases the amount of quiet backlog evidence required before the next trial.
+This makes repeated failed returns to standard mode progressively rarer.
+
+The low-water threshold is `hookExitThreshold` times `hookQueueMaxSize`, with a minimum of one.
+The default is 0.5, meaning Bosk tries standard mode once the backlog has fallen to about half the queue limit.
+Lower values make Bosk stay in overload mode longer before trying standard mode again.
+It can be changed with `BoskConfig.builder().hookExitThreshold(...)`.
 
 A hook that must observe every intermediate update cannot use overload mode safely; that requires a separate delivery policy.
 

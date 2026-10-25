@@ -1,0 +1,134 @@
+package works.bosk;
+
+/**
+ * Decides when the local driver should leave overload mode.
+ *
+ * <p>
+ * Overload mode is left in two steps. First, the backlog must remain low for
+ * enough consecutive generations. Then the driver runs a bounded trial of
+ * standard mode. The driver commits to standard mode only if that trial
+ * completes without overflowing the queue. A failed trial increases the
+ * number of quiet generations required before the next trial.
+ */
+final class OverloadController {
+	enum Mode {
+		STANDARD,
+		OVERLOAD,
+		PROBATION
+	}
+
+	enum OverloadDecision {
+		CONTINUE,
+		START_PROBATION
+	}
+
+	private final int queueMaxSize;
+	private final double exitThreshold;
+
+	/**
+	 * Volatile because the draining thread reads the mode outside the driver's monitor.
+	 */
+	private volatile Mode mode = Mode.STANDARD;
+	private int lowBacklogStreak;
+	private int requiredQuietGenerations = 1;
+	private int probationRemaining;
+
+	OverloadController(int queueMaxSize, double exitThreshold) {
+		this.queueMaxSize = queueMaxSize;
+		this.exitThreshold = exitThreshold;
+	}
+
+	Mode mode() {
+		return mode;
+	}
+
+	int lowWaterMark() {
+		return Math.max(1, (int) (queueMaxSize * exitThreshold));
+	}
+
+	int requiredQuietGenerations() {
+		return requiredQuietGenerations;
+	}
+
+	int probationRemaining() {
+		return probationRemaining;
+	}
+
+	void enterOverload() {
+		assert mode == Mode.STANDARD : "Can only enter overload mode from standard mode";
+		mode = Mode.OVERLOAD;
+		lowBacklogStreak = 0;
+		requiredQuietGenerations = 1;
+		probationRemaining = 0;
+	}
+
+	/**
+	 * Records an overload generation that still had pending work, so it does
+	 * not count as evidence that the backlog has drained.
+	 */
+	void recordBusyGeneration() {
+		assert mode == Mode.OVERLOAD : "Busy generations only occur in overload mode";
+		lowBacklogStreak = 0;
+	}
+
+	/**
+	 * Records the backlog at a generation boundary.
+	 *
+	 * @param backlog queued hook executions plus pending hook notifications
+	 */
+	OverloadDecision observeBacklog(int backlog) {
+		assert mode == Mode.OVERLOAD : "Backlog observations only occur in overload mode";
+		if (backlog <= lowWaterMark()) {
+			lowBacklogStreak++;
+			if (lowBacklogStreak >= requiredQuietGenerations) {
+				mode = Mode.PROBATION;
+				probationRemaining = Math.max(1, queueMaxSize);
+				lowBacklogStreak = 0;
+				return OverloadDecision.START_PROBATION;
+			}
+		} else {
+			lowBacklogStreak = 0;
+		}
+		return OverloadDecision.CONTINUE;
+	}
+
+	/**
+	 * Records one completed hook execution during a standard-mode trial.
+	 *
+	 * @return true if the trial completed successfully
+	 */
+	boolean recordProbationExecution() {
+		assert mode == Mode.PROBATION : "Probation executions only occur in probation mode";
+		probationRemaining--;
+		if (probationRemaining <= 0) {
+			mode = Mode.STANDARD;
+			lowBacklogStreak = 0;
+			requiredQuietGenerations = 1;
+			probationRemaining = 0;
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Abandons a standard-mode trial because the queue overflowed.
+	 */
+	void failProbation() {
+		assert mode == Mode.PROBATION : "Can only fail a trial while in probation mode";
+		mode = Mode.OVERLOAD;
+		lowBacklogStreak = 0;
+		requiredQuietGenerations = Math.min(MAX_REQUIRED_QUIET_GENERATIONS, requiredQuietGenerations * 2);
+	}
+
+	/**
+	 * Returns to overload mode after an interrupted batch. Any backoff already
+	 * accumulated is preserved.
+	 */
+	void returnToOverload() {
+		mode = Mode.OVERLOAD;
+		lowBacklogStreak = 0;
+		probationRemaining = 0;
+	}
+
+	private static final int MAX_REQUIRED_QUIET_GENERATIONS = 1024;
+}
