@@ -47,7 +47,7 @@ final class OverloadController {
 
 	OverloadController(int queueMaxSize) {
 		this.queueMaxSize = queueMaxSize;
-		this.baseProbeBudget = Math.max(1, Math.min(queueMaxSize, MAX_BASE_PROBE_BUDGET));
+		this.baseProbeBudget = BASE_PROBE_BUDGET;
 		this.maxProbeBudget = (int) Math.min((long) baseProbeBudget * MAX_PROBE_MULTIPLIER, Integer.MAX_VALUE);
 		this.probeBudget = baseProbeBudget;
 	}
@@ -101,7 +101,7 @@ final class OverloadController {
 		assert mode == Mode.PROBATION : "Probation executions only occur in probation mode";
 		probeExecutions++;
 		probeRemaining--;
-		if (probeExecutions >= minimumProbeExecutions() && backlog >= probeStartBacklog) {
+		if (probeExecutions >= MIN_PROBE_EXECUTIONS && backlog >= probeStartBacklog) {
 			mode = Mode.OVERLOAD;
 			return ProbationResult.FAILED;
 		}
@@ -134,10 +134,6 @@ final class OverloadController {
 		assert mode == Mode.PROBATION : "A trial can only fail while in probation mode";
 		mode = Mode.OVERLOAD;
 		probeRemaining = 0;
-	}
-
-	private int minimumProbeExecutions() {
-		return Math.min(MIN_PROBE_EXECUTIONS, baseProbeBudget);
 	}
 
 	/**
@@ -196,7 +192,7 @@ final class OverloadController {
 		}
 	}
 
-	private static final int MAX_BASE_PROBE_BUDGET = 64;
-	private static final int MIN_PROBE_EXECUTIONS = 8;
-	private static final int MAX_PROBE_MULTIPLIER = 16;
+	private static final int BASE_PROBE_BUDGET = 50;
+	private static final int MIN_PROBE_EXECUTIONS = 5;
+	private static final int MAX_PROBE_MULTIPLIER = 10;
 }
