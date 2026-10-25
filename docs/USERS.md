@@ -604,16 +604,17 @@ The default limit is 1000.
 It can be changed with `BoskConfig.builder().hookQueueMaxSize(...)`.
 Before the limit is reached, the queue still holds one execution per update, so the limit is also a memory bound; raising it allows more state snapshots to accumulate before coalescing.
 
-Once overload mode begins, Bosk waits for the combined queued and pending backlog to fall to the exit threshold,
-then runs a bounded trial of standard mode.
-It returns to standard mode only if that trial completes without the queue reaching the limit.
-A failed trial returns to overload mode and increases the amount of quiet backlog evidence required before the next trial.
-This makes repeated failed returns to standard mode progressively rarer.
+Once overload mode begins, Bosk periodically runs a bounded probation in standard style when the pending set has drained and the queue has work.
+The probation lasts for at most `hookQueueMaxSize` hook executions.
+It succeeds only if at least half of its starting backlog has drained by the end; otherwise Bosk returns to overload mode.
+The queue limit remains the hard memory bound, and reaching it during probation fails the probation immediately.
 
-The exit threshold is an absolute backlog count, capped by the queue limit.
-The default is 8, meaning Bosk tries standard mode once at most eight queued or pending hook obligations remain.
-Lower values make Bosk stay in overload mode longer before trying standard mode again.
-It can be changed with `BoskConfig.builder().hookExitThreshold(...)`.
+A successful probation is followed by one final overload-mode catch-up generation, which coalesces the remaining backlog before standard mode resumes.
+If at most one queued execution remains, that catch-up is skipped because there is nothing to coalesce.
+
+If standard mode overflows soon after a successful probation, the next probation is longer.
+The probe budget doubles after each such early overflow, up to sixteen times the queue limit.
+After sustained standard-mode work, the probe budget decays linearly back toward the queue limit, so a burst from the distant past does not affect the server forever.
 
 A hook that must observe every intermediate update cannot use overload mode safely; that requires a separate delivery policy.
 

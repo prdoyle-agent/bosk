@@ -52,7 +52,6 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 	final Identifier instanceID = Identifier.from(randomUUID().toString());
 	final BoskContext context;
 	final int hookQueueMaxSize;
-	final int hookExitThreshold;
 
 	final IngressDriver ingressDriver;
 	final LocalDriver localDriver;
@@ -91,7 +90,6 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 	protected BoskBase(String name, Type rootType, Bosk.DefaultStateFunction<R> defaultStateFunction, BoskConfig<R> boskConfig) {
 		this.name = requireNonNull(name);
 		this.hookQueueMaxSize = boskConfig.hookQueueMaxSize();
-		this.hookExitThreshold = boskConfig.hookExitThreshold();
 		this.pathCompiler = PathCompiler.withSourceType(requireNonNull(rootType)); // Required before rootRef
 		this.localDriver = new LocalDriver(requireNonNull(defaultStateFunction));
 		this.rootRef = new RootRef(rootType);
@@ -263,10 +261,12 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 	 * guarantees above still apply; the breadth-first per-event ordering describes
 	 * normal mode.
 	 * <p>
-	 * After the backlog has drained below a threshold, the driver runs a bounded
-	 * trial of standard mode. The driver leaves overload mode only if the trial
-	 * completes without the queue reaching its limit. A failed trial returns to
-	 * overload mode and increases the evidence required before the next trial.
+	 * Once the pending set has drained, the driver runs a bounded probation in
+	 * standard style. The probation succeeds only if at least half its starting
+	 * backlog has drained, and a successful probation is followed by one final
+	 * overload catch-up generation. A failed probation returns to overload mode.
+	 * A standard-mode overflow soon after a successful probation lengthens the
+	 * next probation; sustained standard-mode work shortens it again.
 	 *
 	 * <p>
 	 * Satisfying all of these simultaneously is tricky, especially because we can't just put
@@ -283,7 +283,7 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 		final Deque<HookExecution<?>> hookExecutionQueue = new ArrayDeque<>();
 		final Semaphore hookExecutionPermit = new Semaphore(1);
 		final OverloadPendingSet overloadPending = new OverloadPendingSet();
-		final OverloadController overloadController = new OverloadController(hookQueueMaxSize, hookExitThreshold);
+		final OverloadController overloadController = new OverloadController(hookQueueMaxSize);
 
 		public LocalDriver(Bosk.DefaultStateFunction<R> initialStateFunction) {
 			this.initialStateFunction = initialStateFunction;
@@ -512,14 +512,18 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 			hookExecutionQueue.addLast(new HookExecution<>(reg, changedRef, rootForHook, existedBefore, existsAfter, diagnosticAttributes));
 			switch (overloadController.mode()) {
 				case PROBATION -> {
-					// A trial fails as soon as the backlog grows beyond the exit threshold.
-					if (hookExecutionQueue.size() > overloadController.backlogThreshold()) {
+					if (hookExecutionQueue.size() >= hookQueueMaxSize) {
 						probationFailed();
 					}
 				}
 				case STANDARD -> {
 					if (hookExecutionQueue.size() >= hookQueueMaxSize) {
 						enterOverloadMode();
+					}
+				}
+				case CATCH_UP -> {
+					if (hookExecutionQueue.size() >= hookQueueMaxSize) {
+						catchUpFailed();
 					}
 				}
 				case OVERLOAD -> {
@@ -623,6 +627,7 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 										break drain;
 									}
 								}
+								case CATCH_UP -> runCatchUpBatch();
 								case STANDARD, PROBATION -> {
 									HookExecution<?> execution;
 									synchronized (this) {
@@ -632,13 +637,11 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 										break drain;
 									}
 									execution.run();
-									if (overloadController.mode() == PROBATION) {
-										synchronized (this) {
-											if (overloadController.mode() == PROBATION) {
-												if (overloadController.recordProbationExecution()) {
-													HOOK_LOGGER.info("Hook backlog returned to normal; leaving overload mode");
-												}
-											}
+									switch (overloadController.mode()) {
+										case STANDARD -> overloadController.recordStandardExecution();
+										case PROBATION -> recordProbationExecution();
+										case OVERLOAD, CATCH_UP -> {
+											// The trial or catch-up aborted while the hook was running.
 										}
 									}
 								}
@@ -709,17 +712,12 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 			R snapshot;
 			synchronized (this) {
 				if (overloadPending.isEmpty()) {
-					int backlog = backlog();
-					if (overloadController.observeBacklog(backlog)) {
-						HOOK_LOGGER.debug("Hook backlog is low; trying standard mode");
-						return OverloadBatchResult.STARTED_PROBATION;
-					}
 					if (hookExecutionQueue.isEmpty()) {
 						return OverloadBatchResult.IDLE;
 					}
-					collapseHookExecutionQueue();
-				} else {
-					overloadController.recordBusyGeneration();
+					overloadController.startProbation(backlog());
+					HOOK_LOGGER.debug("Starting standard-mode probation");
+					return OverloadBatchResult.STARTED_PROBATION;
 				}
 				batch = overloadPending.detach();
 				snapshot = currentRoot();
@@ -736,9 +734,68 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 
 		private void probationFailed() {
 			assert holdsLock(this);
-			overloadController.failProbation();
+			overloadController.probationFailed();
 			collapseHookExecutionQueue();
-			HOOK_LOGGER.debug("Standard mode trial failed; returning to overload mode");
+			HOOK_LOGGER.debug("Standard-mode probation failed; returning to overload mode");
+		}
+
+		private void recordProbationExecution() {
+			synchronized (this) {
+				if (overloadController.mode() != OverloadController.Mode.PROBATION) {
+					return;
+				}
+				switch (overloadController.recordProbationExecution(backlog())) {
+					case CONTINUE -> {
+					}
+					case SUCCEEDED -> HOOK_LOGGER.debug("Standard-mode probation succeeded; starting final catch-up");
+					case FAILED -> {
+						collapseHookExecutionQueue();
+						HOOK_LOGGER.debug("Standard-mode probation did not drain the backlog; returning to overload mode");
+					}
+				}
+			}
+		}
+
+		private void runCatchUpBatch() throws InterruptedException {
+			Map<Path, PendingHooks> batch;
+			R snapshot;
+			synchronized (this) {
+				if (overloadPending.isEmpty()) {
+					if (hookExecutionQueue.size() <= 1) {
+						overloadController.catchUpFinished(true);
+						HOOK_LOGGER.info("Hook backlog returned to normal; leaving overload mode");
+						return;
+					}
+					collapseHookExecutionQueue();
+				}
+				batch = overloadPending.detach();
+				snapshot = currentRoot();
+			}
+			HOOK_LOGGER.debug("Hook: final catch-up batch with {} paths", batch.size());
+			try {
+				runPendingBatch(batch, snapshot);
+			} catch (InterruptedException | RuntimeException | Error e) {
+				requeueOverloadBatch(batch);
+				throw e;
+			}
+			synchronized (this) {
+				if (overloadController.mode() != OverloadController.Mode.CATCH_UP) {
+					return;
+				}
+				if (!overloadPending.isEmpty() || hookExecutionQueue.size() >= hookQueueMaxSize) {
+					catchUpFailed();
+				} else {
+					overloadController.catchUpFinished(true);
+					HOOK_LOGGER.info("Hook backlog returned to normal; leaving overload mode");
+				}
+			}
+		}
+
+		private void catchUpFailed() {
+			assert holdsLock(this);
+			overloadController.catchUpFailed();
+			collapseHookExecutionQueue();
+			HOOK_LOGGER.debug("Final catch-up could not clear the backlog; returning to overload mode");
 		}
 
 		private int backlog() {

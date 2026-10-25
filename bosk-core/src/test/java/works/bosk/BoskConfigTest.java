@@ -9,15 +9,15 @@ class BoskConfigTest {
 	record TestState() implements StateTreeNode {}
 
 	@Test
-	void defaultExitThresholdIsSmall() {
+	void defaultHookQueueLimit() {
 		BoskConfig<TestState> config = BoskConfig.<TestState>builder().build();
-		assertEquals(8, config.hookExitThreshold(), "The default exit threshold should allow only a small backlog");
+		assertEquals(1000, config.hookQueueMaxSize(), "The default hook queue limit should be 1000");
 	}
 
 	@Test
-	void exitThresholdMustBePositive() {
+	void hookQueueLimitMustBePositive() {
 		assertThrows(IllegalArgumentException.class,
-			() -> BoskConfig.<TestState>builder().hookExitThreshold(0).build(),
-			"A zero exit threshold would never leave overload mode");
+			() -> BoskConfig.<TestState>builder().hookQueueMaxSize(0).build(),
+			"A non-positive hook queue limit is not meaningful");
 	}
 }
