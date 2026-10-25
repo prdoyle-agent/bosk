@@ -56,7 +56,6 @@ public final class LoadResultCsvWriter {
 			csv(config.hookScope().name()),
 			Integer.toString(config.hookCount()),
 			Integer.toString(config.hookQueueMaxSize()),
-			Integer.toString(config.hookExitThreshold()),
 			Long.toString(config.warmup().toMillis()),
 			Long.toString(config.duration().toMillis()),
 			csv(config.flushMode().name()),
@@ -136,7 +135,7 @@ public final class LoadResultCsvWriter {
 
 	private static final List<String> SUMMARY_HEADER = List.of(
 		"run_id", "started_at", "label", "driver", "entities", "threads", "value_bytes",
-		"hook_latency_ms", "hook_scope", "hook_count", "hook_queue_max_size", "hook_exit_threshold",
+		"hook_latency_ms", "hook_scope", "hook_count", "hook_queue_max_size",
 		"warmup_ms", "duration_ms", "flush_mode", "flush_every", "ops", "measured_ms",
 		"throughput_ops_per_sec", "errors", "verified", "verification_message", "stalled",
 		"submit_count", "submit_mean_ms", "submit_p50_ms", "submit_p95_ms", "submit_p99_ms",

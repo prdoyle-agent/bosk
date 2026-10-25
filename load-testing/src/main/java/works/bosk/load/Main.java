@@ -119,7 +119,6 @@ public final class Main {
 			--hookScope=root         Hook scope: root or entity
 			--hookCount=1            Number of hooks to register
 			--hookQueueMaxSize=1000  Hook queue threshold for overload mode
-			--hookExitThreshold=8    Backlog count at or below which overload mode may try standard mode
 			--seed=1                 Reserved for future randomized workloads
 			--stallTimeout=60s       How long to wait for workers to stop
 			--label=...              Label included in the output

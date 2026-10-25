@@ -46,7 +46,6 @@ Options:
 | `--hookScope` | `root` | Hook scope: `root` or `entity` |
 | `--hookCount` | `1` | Number of hooks to register |
 | `--hookQueueMaxSize` | `1000` | Hook queue threshold at which overload mode begins |
-| `--hookExitThreshold` | `8` | Backlog count at or below which overload mode may try standard mode |
 | `--stallTimeout` | `60s` | How long to wait for workers to stop before dumping threads |
 | `--label` | empty | Label included in the output |
 | `--out` | `build/load-results` | Output directory |
@@ -139,20 +138,19 @@ The threshold is the memory bound. With a 64 MB heap, 10,000 and 20,000 queued e
 
 ### Backlog and probation
 
-The current controller replaces the two-small-batch rule. It tracks queued executions plus pending hook obligations, waits until that backlog is at most `hookExitThreshold` (default 8), then runs a bounded standard-mode trial. A trial fails as soon as the backlog grows beyond the exit threshold; it commits to standard mode only if it completes without doing so.
+The current controller replaces the two-small-batch rule. When the pending set drains and queued work remains, it runs a bounded standard-mode probation of up to `min(hookQueueMaxSize, 64)` hook executions initially. The probation succeeds only if at least half its starting backlog drains; otherwise the driver returns to overload. A successful probation runs one final coalesced catch-up generation before standard mode resumes, except when at most one queued execution remains. An early standard-mode overflow doubles the next probe budget, capped at 16x its base, and sustained standard-mode work decays it linearly.
 
-The first version used a fractional threshold, `0.5 * hookQueueMaxSize`. That failed under a slow hook: a trial could start with hundreds of queued standard executions and a 1,000-execution budget, so the post-measurement drain stalled. Making the threshold an absolute backlog count, and failing the trial when the queue grows beyond it, bounds the trial's standard queue to a small number of executions.
+A probe budget equal to the full queue limit still allowed a slow hook to spend tens of seconds draining a standard queue. Capping the base probe budget at 64 hook executions, and aborting early when a minimum sample shows no drain, bounds that tail. The probe budget still grows after a post-probation overflow and decays after sustained standard work.
 
-With the absolute threshold, all 256 MB runs below completed and verified. Each run emitted one overload warning and did not repeat it.
+With the capped budget, all runs below completed and verified. Each run emitted one overload warning and did not repeat it.
 
 | Threads | Hook | Scope | Entities | Duration | Throughput (ops/s) | Heap after | Result |
 |---:|---:|---|---:|---:|---:|---:|---|
-| 2 | 1 ms | root | 1,000 | 5 s | 2,470,694 | 33.4 MB | completed |
-| 4 | 1 ms | root | 1,000 | 10 s | 2,385,603 | 54.3 MB | completed |
-| 4 | 10 ms | root | 1,000 | 10 s | 2,193,110 | 47.1 MB | completed |
-| 4 | 100 ms | root | 1,000 | 10 s | 2,212,085 | 37.2 MB | completed |
-| 4 | 1 ms | entity | 1,000 | 10 s | 1,091,172 | 14.2 MB | completed, 32 MB heap |
-| 4 | 1 ms | entity | 10,000 | 10 s | 843,986 | 43.6 MB | completed, 64 MB heap |
+| 2 | 1 ms | root | 1,000 | 5 s | 2,463,968 | 32.0 MB | completed |
+| 4 | 1 ms | root | 1,000 | 10 s | 2,202,499 | 27.3 MB | completed |
+| 4 | 100 ms | root | 1,000 | 10 s | 2,161,368 | 35.9 MB | completed |
+| 4 | 1 ms | entity | 1,000 | 10 s | 924,230 | 13.1 MB | completed, 32 MB heap |
+| 4 | 1 ms | entity | 10,000 | 10 s | 746,686 | 46.5 MB | completed, 64 MB heap |
 
 The saturated runs stay in overload mode for the whole measurement, as expected. The exit path is covered by unit tests, which exercise quiet backlog, a successful trial, a failed trial, and increasing backoff. A load phase that deliberately drops from overload to quiescence would be a useful addition to the harness.
 

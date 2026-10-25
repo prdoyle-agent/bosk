@@ -26,7 +26,6 @@ import static java.util.Objects.requireNonNull;
  * @param hookScope        whether each hook is scoped to the root or to every entity's string
  * @param hookCount        how many hooks to register
  * @param hookQueueMaxSize the hook queue threshold at which overload mode begins
- * @param hookExitThreshold the backlog count at or below which overload mode may try standard mode
  * @param seed             reserved for future randomized workloads
  * @param stallTimeout     how long to wait for workers to stop before declaring a stall
  * @param outputDirectory  where the summary and sample CSVs are written
@@ -45,7 +44,6 @@ public record LoadConfig(
 	HookScope hookScope,
 	int hookCount,
 	int hookQueueMaxSize,
-	int hookExitThreshold,
 	long seed,
 	Duration stallTimeout,
 	Path outputDirectory
@@ -91,9 +89,6 @@ public record LoadConfig(
 		if (hookQueueMaxSize <= 0) {
 			throw new IllegalArgumentException("hookQueueMaxSize must be positive");
 		}
-		if (hookExitThreshold < 1) {
-			throw new IllegalArgumentException("hookExitThreshold must be positive");
-		}
 	}
 
 	public static Builder builder() {
@@ -114,7 +109,6 @@ public record LoadConfig(
 		private HookScope hookScope = HookScope.ROOT;
 		private int hookCount = 1;
 		private int hookQueueMaxSize = 1000;
-		private int hookExitThreshold = 8;
 		private long seed = 1L;
 		private Duration stallTimeout = Duration.ofSeconds(60);
 		private Path outputDirectory = Path.of("build", "load-results");
@@ -184,11 +178,6 @@ public record LoadConfig(
 			return this;
 		}
 
-		public Builder hookExitThreshold(int hookExitThreshold) {
-			this.hookExitThreshold = hookExitThreshold;
-			return this;
-		}
-
 		public Builder seed(long seed) {
 			this.seed = seed;
 			return this;
@@ -219,7 +208,6 @@ public record LoadConfig(
 				hookScope,
 				hookCount,
 				hookQueueMaxSize,
-				hookExitThreshold,
 				seed,
 				stallTimeout,
 				outputDirectory

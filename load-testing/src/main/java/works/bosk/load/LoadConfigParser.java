@@ -44,7 +44,6 @@ public final class LoadConfigParser {
 				case "hookScope" -> builder.hookScope(HookScope.fromCli(value));
 				case "hookCount" -> builder.hookCount(intValue(name, value));
 				case "hookQueueMaxSize" -> builder.hookQueueMaxSize(intValue(name, value));
-				case "hookExitThreshold" -> builder.hookExitThreshold(intValue(name, value));
 				case "seed" -> builder.seed(longValue(name, value));
 				case "stallTimeout" -> builder.stallTimeout(parseDuration(name, value));
 				case "out" -> builder.outputDirectory(Path.of(value));
