@@ -51,6 +51,17 @@ class OverloadControllerTest {
 	}
 
 	@Test
+	void probationAbortsEarlyWhenTheBacklogIsNotDraining() {
+		controller.enterOverload();
+		controller.startProbation(10);
+		for (int i = 0; i < 7; i++) {
+			assertEquals(CONTINUE, controller.recordProbationExecution(10), "The trial should keep sampling");
+		}
+		assertEquals(FAILED, controller.recordProbationExecution(10), "A flat backlog should abort the trial");
+		assertEquals(OVERLOAD, controller.mode(), "An early abort should return to overload mode");
+	}
+
+	@Test
 	void probationFailureReturnsToOverload() {
 		controller.enterOverload();
 		controller.startProbation(10);

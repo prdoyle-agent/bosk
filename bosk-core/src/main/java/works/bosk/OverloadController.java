@@ -39,6 +39,7 @@ final class OverloadController {
 	private volatile Mode mode = Mode.STANDARD;
 	private int probeBudget;
 	private int probeRemaining;
+	private int probeExecutions;
 	private int probeStartBacklog;
 	private boolean postProbationOverflowWindow;
 	private int standardExecutions;
@@ -88,6 +89,7 @@ final class OverloadController {
 		mode = Mode.PROBATION;
 		probeStartBacklog = startBacklog;
 		probeRemaining = probeBudget;
+		probeExecutions = 0;
 	}
 
 	/**
@@ -97,7 +99,12 @@ final class OverloadController {
 	 */
 	synchronized ProbationResult recordProbationExecution(int backlog) {
 		assert mode == Mode.PROBATION : "Probation executions only occur in probation mode";
+		probeExecutions++;
 		probeRemaining--;
+		if (probeExecutions >= minimumProbeExecutions() && backlog >= probeStartBacklog) {
+			mode = Mode.OVERLOAD;
+			return ProbationResult.FAILED;
+		}
 		if (probeRemaining > 0) {
 			return ProbationResult.CONTINUE;
 		}
@@ -127,6 +134,10 @@ final class OverloadController {
 		assert mode == Mode.PROBATION : "A trial can only fail while in probation mode";
 		mode = Mode.OVERLOAD;
 		probeRemaining = 0;
+	}
+
+	private int minimumProbeExecutions() {
+		return Math.min(MIN_PROBE_EXECUTIONS, baseProbeBudget);
 	}
 
 	/**
@@ -185,5 +196,6 @@ final class OverloadController {
 		}
 	}
 
+	private static final int MIN_PROBE_EXECUTIONS = 8;
 	private static final int MAX_PROBE_MULTIPLIER = 16;
 }
