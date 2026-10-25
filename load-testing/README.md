@@ -137,7 +137,24 @@ Further stress results, all with the `simple` driver and 1,000 entities unless n
 
 The threshold is the memory bound. With a 64 MB heap, 10,000 and 20,000 queued executions completed; 50,000 reported a stall at a 10 s timeout with about 30 MB live, so that was tail drain rather than OOM; 100,000 exhausted the heap. At 128 MB, 100,000 did not OOM in an earlier run but still produced a long stall; large thresholds remain a configuration hazard. At 256 MB, 1,000,000 still exhausted the heap. The default of 1,000 is safe for this workload; configuring a much larger threshold lets the pre-overload queue retain more state.
 
-The two-small-batch rule reduced warning repetition for sustained slow-hook overload: the 100 ms run emitted one warning. Fast hooks can still oscillate near the threshold; 2 threads with a 1 ms hook produced 17 warnings in 2 s. A warning cooldown would be a separate improvement.
+### Backlog and probation
+
+The current controller replaces the two-small-batch rule. It tracks queued executions plus pending hook obligations, waits until that backlog is at most `hookExitThreshold` (default 8), then runs a bounded standard-mode trial. A trial fails as soon as the backlog grows beyond the exit threshold; it commits to standard mode only if it completes without doing so.
+
+The first version used a fractional threshold, `0.5 * hookQueueMaxSize`. That failed under a slow hook: a trial could start with hundreds of queued standard executions and a 1,000-execution budget, so the post-measurement drain stalled. Making the threshold an absolute backlog count, and failing the trial when the queue grows beyond it, bounds the trial's standard queue to a small number of executions.
+
+With the absolute threshold, all 256 MB runs below completed and verified. Each run emitted one overload warning and did not repeat it.
+
+| Threads | Hook | Scope | Entities | Duration | Throughput (ops/s) | Heap after | Result |
+|---:|---:|---|---:|---:|---:|---:|---|
+| 2 | 1 ms | root | 1,000 | 5 s | 2,470,694 | 33.4 MB | completed |
+| 4 | 1 ms | root | 1,000 | 10 s | 2,385,603 | 54.3 MB | completed |
+| 4 | 10 ms | root | 1,000 | 10 s | 2,193,110 | 47.1 MB | completed |
+| 4 | 100 ms | root | 1,000 | 10 s | 2,212,085 | 37.2 MB | completed |
+| 4 | 1 ms | entity | 1,000 | 10 s | 1,091,172 | 14.2 MB | completed, 32 MB heap |
+| 4 | 1 ms | entity | 10,000 | 10 s | 843,986 | 43.6 MB | completed, 64 MB heap |
+
+The saturated runs stay in overload mode for the whole measurement, as expected. The exit path is covered by unit tests, which exercise quiet backlog, a successful trial, a failed trial, and increasing backoff. A load phase that deliberately drops from overload to quiescence would be a useful addition to the harness.
 
 ### With Mongo
 
