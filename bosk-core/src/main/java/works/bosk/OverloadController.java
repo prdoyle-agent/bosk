@@ -4,16 +4,17 @@ package works.bosk;
  * Decides when the local driver should leave overload mode.
  *
  * <p>
- * Overload mode is left through a bounded standard-mode trial. The trial starts
- * when the pending set has drained and there is queued work to test. It succeeds
- * only if at least half of the backlog has drained by the end of its work budget.
- * A successful trial runs one final overload catch-up generation before the
- * driver returns to standard mode.
+ * Overload mode is left through a bounded standard-mode probation. The probation
+ * starts when the pending set has drained and there is queued work to test. It
+ * succeeds only if at least half of the backlog has drained by the end of its
+ * work budget. A successful probation runs one final overload catch-up generation
+ * before the driver returns to standard mode.
  *
  * <p>
- * A standard-mode overflow soon after a successful trial means the trial was too
- * short. The next trial is longer. After sustained standard-mode work, the trial
- * length decays linearly back to its base value.
+ * A standard-mode overflow soon after a successful probation means the probation
+ * was too short. The next probation uses twice as many queue-lengths of hook
+ * executions. After sustained standard-mode work, the multiplier decays linearly
+ * back to one.
  */
 final class OverloadController {
 	enum Mode {
@@ -30,37 +31,31 @@ final class OverloadController {
 	}
 
 	private final int queueMaxSize;
-	private final int baseProbeBudget;
-	private final int maxProbeBudget;
 
 	/**
 	 * Volatile because the draining thread reads the mode outside the driver's monitor.
 	 */
 	private volatile Mode mode = Mode.STANDARD;
-	private int probeBudget;
-	private int probeRemaining;
-	private int probeExecutions;
-	private int probeStartBacklog;
+	private long probeMultiplier = 1;
+	private long probeRemaining;
+	private long probeStartBacklog;
 	private boolean postProbationOverflowWindow;
 	private int standardExecutions;
 	private int decayExecutions;
 
 	OverloadController(int queueMaxSize) {
 		this.queueMaxSize = queueMaxSize;
-		this.baseProbeBudget = BASE_PROBE_BUDGET;
-		this.maxProbeBudget = (int) Math.min((long) baseProbeBudget * MAX_PROBE_MULTIPLIER, Integer.MAX_VALUE);
-		this.probeBudget = baseProbeBudget;
 	}
 
 	Mode mode() {
 		return mode;
 	}
 
-	synchronized int probeBudget() {
-		return probeBudget;
+	synchronized long probeBudget() {
+		return Math.multiplyExact(probeMultiplier, (long) queueMaxSize);
 	}
 
-	synchronized int probeRemaining() {
+	synchronized long probeRemaining() {
 		return probeRemaining;
 	}
 
@@ -70,7 +65,7 @@ final class OverloadController {
 	synchronized void enterOverload() {
 		assert mode == Mode.STANDARD : "Overload mode is entered from standard mode";
 		if (postProbationOverflowWindow) {
-			probeBudget = (int) Math.min((long) maxProbeBudget, (long) probeBudget * 2);
+			probeMultiplier = Math.multiplyExact(probeMultiplier, 2);
 		}
 		mode = Mode.OVERLOAD;
 		postProbationOverflowWindow = false;
@@ -80,31 +75,25 @@ final class OverloadController {
 	}
 
 	/**
-	 * Starts a standard-mode trial from overload mode.
+	 * Starts a standard-mode probation from overload mode.
 	 *
-	 * @param startBacklog the backlog when the trial begins
+	 * @param startBacklog the backlog when the probation begins
 	 */
 	synchronized void startProbation(int startBacklog) {
 		assert mode == Mode.OVERLOAD : "Probation starts from overload mode";
 		mode = Mode.PROBATION;
 		probeStartBacklog = startBacklog;
-		probeRemaining = probeBudget;
-		probeExecutions = 0;
+		probeRemaining = probeBudget();
 	}
 
 	/**
-	 * Records one completed hook execution during a trial.
+	 * Records one completed hook execution during a probation.
 	 *
 	 * @param backlog the backlog after the execution
 	 */
 	synchronized ProbationResult recordProbationExecution(int backlog) {
 		assert mode == Mode.PROBATION : "Probation executions only occur in probation mode";
-		probeExecutions++;
 		probeRemaining--;
-		if (probeExecutions >= MIN_PROBE_EXECUTIONS && backlog >= probeStartBacklog) {
-			mode = Mode.OVERLOAD;
-			return ProbationResult.FAILED;
-		}
 		if (probeRemaining > 0) {
 			return ProbationResult.CONTINUE;
 		}
@@ -118,7 +107,7 @@ final class OverloadController {
 	}
 
 	/**
-	 * Returns to overload mode after an interrupted batch. Any probe budget
+	 * Returns to overload mode after an interrupted batch. Any probe-budget
 	 * adjustment is preserved.
 	 */
 	synchronized void returnToOverload() {
@@ -128,10 +117,10 @@ final class OverloadController {
 	}
 
 	/**
-	 * Abandons a trial because the queue reached its limit.
+	 * Abandons a probation because the queue reached its limit.
 	 */
 	synchronized void probationFailed() {
-		assert mode == Mode.PROBATION : "A trial can only fail while in probation mode";
+		assert mode == Mode.PROBATION : "A probation can only fail while in probation mode";
 		mode = Mode.OVERLOAD;
 		probeRemaining = 0;
 	}
@@ -167,8 +156,8 @@ final class OverloadController {
 
 	/**
 	 * Records one completed standard-mode hook execution. The first queue's
-	 * worth of executions validates a preceding trial; after that, each queue's
-	 * worth slowly reduces an inflated probe budget.
+	 * worth of executions validates a preceding probation; after that, each
+	 * queue's worth slowly reduces an inflated probe multiplier.
 	 */
 	synchronized void recordStandardExecution() {
 		if (mode != Mode.STANDARD) {
@@ -185,14 +174,10 @@ final class OverloadController {
 			decayExecutions++;
 			if (decayExecutions >= queueMaxSize) {
 				decayExecutions = 0;
-				if (probeBudget > baseProbeBudget) {
-					probeBudget--;
+				if (probeMultiplier > 1) {
+					probeMultiplier--;
 				}
 			}
 		}
 	}
-
-	private static final int BASE_PROBE_BUDGET = 50;
-	private static final int MIN_PROBE_EXECUTIONS = 5;
-	private static final int MAX_PROBE_MULTIPLIER = 10;
 }
