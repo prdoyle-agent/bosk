@@ -21,11 +21,16 @@ class OverloadControllerTest {
 	}
 
 	@Test
+	void baseProbeBudgetIsCappedForLargeQueues() {
+		assertEquals(64, new OverloadController(1000).probeBudget(), "Large queues should use the capped base probe budget");
+	}
+
+	@Test
 	void probationRunsForTheProbeBudget() {
 		controller.enterOverload();
 		controller.startProbation(5);
 		assertEquals(PROBATION, controller.mode(), "Starting a trial should enter probation mode");
-		assertEquals(10, controller.probeRemaining(), "The trial should have one queue's worth of executions");
+		assertEquals(10, controller.probeRemaining(), "The trial should use the base probe budget");
 	}
 
 	@Test
