@@ -23,7 +23,7 @@ final class OverloadController {
 	}
 
 	private final int queueMaxSize;
-	private final double exitThreshold;
+	private final int exitThreshold;
 
 	/**
 	 * Volatile because the draining thread reads the mode outside the driver's monitor.
@@ -33,7 +33,7 @@ final class OverloadController {
 	private int requiredQuietGenerations = 1;
 	private int probationRemaining;
 
-	OverloadController(int queueMaxSize, double exitThreshold) {
+	OverloadController(int queueMaxSize, int exitThreshold) {
 		this.queueMaxSize = queueMaxSize;
 		this.exitThreshold = exitThreshold;
 	}
@@ -43,7 +43,7 @@ final class OverloadController {
 	}
 
 	int lowWaterMark() {
-		return Math.max(1, (int) (queueMaxSize * exitThreshold));
+		return Math.min(queueMaxSize, Math.max(1, exitThreshold));
 	}
 
 	int requiredQuietGenerations() {

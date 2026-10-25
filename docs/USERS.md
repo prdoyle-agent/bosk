@@ -610,8 +610,8 @@ It returns to standard mode only if that trial completes without the queue reach
 A failed trial returns to overload mode and increases the amount of quiet backlog evidence required before the next trial.
 This makes repeated failed returns to standard mode progressively rarer.
 
-The low-water threshold is `hookExitThreshold` times `hookQueueMaxSize`, with a minimum of one.
-The default is 0.5, meaning Bosk tries standard mode once the backlog has fallen to about half the queue limit.
+The exit threshold is an absolute backlog count, capped by the queue limit.
+The default is 8, meaning Bosk tries standard mode once at most eight queued or pending hook obligations remain.
 Lower values make Bosk stay in overload mode longer before trying standard mode again.
 It can be changed with `BoskConfig.builder().hookExitThreshold(...)`.
 
