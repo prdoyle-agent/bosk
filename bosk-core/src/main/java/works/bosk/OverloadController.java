@@ -47,7 +47,7 @@ final class OverloadController {
 
 	OverloadController(int queueMaxSize) {
 		this.queueMaxSize = queueMaxSize;
-		this.baseProbeBudget = Math.max(1, queueMaxSize);
+		this.baseProbeBudget = Math.max(1, Math.min(queueMaxSize, MAX_BASE_PROBE_BUDGET));
 		this.maxProbeBudget = (int) Math.min((long) baseProbeBudget * MAX_PROBE_MULTIPLIER, Integer.MAX_VALUE);
 		this.probeBudget = baseProbeBudget;
 	}
@@ -196,6 +196,7 @@ final class OverloadController {
 		}
 	}
 
+	private static final int MAX_BASE_PROBE_BUDGET = 64;
 	private static final int MIN_PROBE_EXECUTIONS = 8;
 	private static final int MAX_PROBE_MULTIPLIER = 16;
 }
