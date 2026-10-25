@@ -46,6 +46,7 @@ Options:
 | `--hookScope` | `root` | Hook scope: `root` or `entity` |
 | `--hookCount` | `1` | Number of hooks to register |
 | `--hookQueueMaxSize` | `1000` | Hook queue threshold at which overload mode begins |
+| `--hookExitThreshold` | `8` | Backlog count at or below which overload mode may try standard mode |
 | `--stallTimeout` | `60s` | How long to wait for workers to stop before dumping threads |
 | `--label` | empty | Label included in the output |
 | `--out` | `build/load-results` | Output directory |

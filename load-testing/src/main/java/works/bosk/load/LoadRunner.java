@@ -75,6 +75,7 @@ public final class LoadRunner {
 			BoskConfig.<TestEntity>builder()
 				.driverFactory(driverFactory(config, mongo, mongoDriver))
 				.hookQueueMaxSize(config.hookQueueMaxSize())
+				.hookExitThreshold(config.hookExitThreshold())
 				.build());
 		workload.initialize(bosk);
 		AtomicBoolean hookActive = new AtomicBoolean(false);
