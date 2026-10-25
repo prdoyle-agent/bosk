@@ -604,7 +604,7 @@ The default limit is 1000.
 It can be changed with `BoskConfig.builder().hookQueueMaxSize(...)`.
 Before the limit is reached, the queue still holds one execution per update, so the limit is also a memory bound; raising it allows more state snapshots to accumulate before coalescing.
 
-Once overload mode begins, Bosk waits for the combined queued and pending backlog to remain below a low-water threshold,
+Once overload mode begins, Bosk waits for the combined queued and pending backlog to fall to the exit threshold,
 then runs a bounded trial of standard mode.
 It returns to standard mode only if that trial completes without the queue reaching the limit.
 A failed trial returns to overload mode and increases the amount of quiet backlog evidence required before the next trial.

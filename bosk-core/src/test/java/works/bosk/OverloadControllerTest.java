@@ -8,8 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static works.bosk.OverloadController.Mode.OVERLOAD;
 import static works.bosk.OverloadController.Mode.PROBATION;
 import static works.bosk.OverloadController.Mode.STANDARD;
-import static works.bosk.OverloadController.OverloadDecision.CONTINUE;
-import static works.bosk.OverloadController.OverloadDecision.START_PROBATION;
 
 class OverloadControllerTest {
 	final OverloadController controller = new OverloadController(10, 5);
@@ -20,19 +18,19 @@ class OverloadControllerTest {
 	}
 
 	@Test
-	void lowWaterMarkIsTheConfiguredBacklogThreshold() {
-		assertEquals(5, controller.lowWaterMark(), "The low-water mark should be the configured backlog threshold");
+	void backlogThresholdIsTheConfiguredValue() {
+		assertEquals(5, controller.backlogThreshold(), "The backlog threshold should be the configured value");
 	}
 
 	@Test
-	void lowWaterMarkIsCappedByTheQueueLimit() {
-		assertEquals(3, new OverloadController(3, 8).lowWaterMark(), "The low-water mark should never exceed the queue limit");
+	void backlogThresholdIsCappedByTheQueueLimit() {
+		assertEquals(3, new OverloadController(3, 8).backlogThreshold(), "The backlog threshold should never exceed the queue limit");
 	}
 
 	@Test
 	void lowBacklogStartsAProbation() {
 		controller.enterOverload();
-		assertEquals(START_PROBATION, controller.observeBacklog(5), "A low backlog should start a standard-mode trial");
+		assertTrue(controller.observeBacklog(5), "A low backlog should start a standard-mode trial");
 		assertEquals(PROBATION, controller.mode(), "The driver should be in probation after a low backlog observation");
 		assertEquals(10, controller.probationRemaining(), "The trial should require one queue's worth of work");
 	}
@@ -43,10 +41,10 @@ class OverloadControllerTest {
 		startAndFailTrial();
 		assertEquals(2, controller.requiredQuietGenerations(), "One failed trial should require two quiet generations");
 
-		assertEquals(CONTINUE, controller.observeBacklog(1), "First quiet generation should not be enough");
-		assertEquals(CONTINUE, controller.observeBacklog(6), "A high backlog should reset the streak");
-		assertEquals(CONTINUE, controller.observeBacklog(1), "A new quiet streak should start over");
-		assertEquals(START_PROBATION, controller.observeBacklog(1), "Two consecutive quiet generations should start a trial");
+		assertFalse(controller.observeBacklog(1), "First quiet generation should not be enough");
+		assertFalse(controller.observeBacklog(6), "A high backlog should reset the streak");
+		assertFalse(controller.observeBacklog(1), "A new quiet streak should start over");
+		assertTrue(controller.observeBacklog(1), "Two consecutive quiet generations should start a trial");
 	}
 
 	@Test
@@ -54,7 +52,7 @@ class OverloadControllerTest {
 		controller.enterOverload();
 		controller.recordBusyGeneration();
 		controller.recordBusyGeneration();
-		assertEquals(START_PROBATION, controller.observeBacklog(1), "A fresh quiet generation should start the first trial");
+		assertTrue(controller.observeBacklog(1), "A fresh quiet generation should start the first trial");
 	}
 
 	@Test
@@ -76,8 +74,8 @@ class OverloadControllerTest {
 		assertEquals(OVERLOAD, controller.mode(), "A failed trial should return to overload mode");
 		assertEquals(2, controller.requiredQuietGenerations(), "A failed trial should double the quiet evidence required");
 
-		assertEquals(CONTINUE, controller.observeBacklog(1), "One quiet generation should no longer be enough");
-		assertEquals(START_PROBATION, controller.observeBacklog(1), "Two quiet generations should start the next trial");
+		assertFalse(controller.observeBacklog(1), "One quiet generation should no longer be enough");
+		assertTrue(controller.observeBacklog(1), "Two quiet generations should start the next trial");
 	}
 
 	@Test
@@ -86,7 +84,7 @@ class OverloadControllerTest {
 		for (int i = 0; i < 20; i++) {
 			startAndFailTrial();
 		}
-		assertEquals(1024, controller.requiredQuietGenerations(), "The required evidence should be capped");
+		assertEquals(1000, controller.requiredQuietGenerations(), "The required evidence should be capped");
 	}
 
 	private void startAndFailTrial() {
