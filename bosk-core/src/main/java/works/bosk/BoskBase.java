@@ -51,7 +51,7 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 	final Identifier instanceID = Identifier.from(randomUUID().toString());
 	final BoskContext context;
 	final int hookQueueMaxSize;
-	final double hookExitThreshold;
+	final int hookExitThreshold;
 
 	final IngressDriver ingressDriver;
 	final LocalDriver localDriver;
@@ -510,8 +510,8 @@ abstract sealed class BoskBase<R extends StateTreeNode> permits Bosk {
 			assert holdsLock(this);
 			hookExecutionQueue.addLast(new HookExecution<>(reg, changedRef, rootForHook, existedBefore, existsAfter, diagnosticAttributes));
 			if (overloadController.mode() == OverloadController.Mode.PROBATION) {
-				// Allow the trial to run with a full queue, but not with an overflowing one.
-				if (hookExecutionQueue.size() > hookQueueMaxSize) {
+				// A trial fails as soon as the backlog grows beyond the exit threshold.
+				if (hookExecutionQueue.size() > overloadController.lowWaterMark()) {
 					probationFailed();
 				}
 			} else if (hookExecutionQueue.size() >= hookQueueMaxSize) {

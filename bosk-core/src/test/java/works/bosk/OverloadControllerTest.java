@@ -12,7 +12,7 @@ import static works.bosk.OverloadController.OverloadDecision.CONTINUE;
 import static works.bosk.OverloadController.OverloadDecision.START_PROBATION;
 
 class OverloadControllerTest {
-	final OverloadController controller = new OverloadController(10, 0.5);
+	final OverloadController controller = new OverloadController(10, 5);
 
 	@Test
 	void startsInStandardMode() {
@@ -20,8 +20,13 @@ class OverloadControllerTest {
 	}
 
 	@Test
-	void lowWaterMarkIsAFractionOfTheQueueLimit() {
-		assertEquals(5, controller.lowWaterMark(), "Half of a ten-entry queue should be the default low-water mark");
+	void lowWaterMarkIsTheConfiguredBacklogThreshold() {
+		assertEquals(5, controller.lowWaterMark(), "The low-water mark should be the configured backlog threshold");
+	}
+
+	@Test
+	void lowWaterMarkIsCappedByTheQueueLimit() {
+		assertEquals(3, new OverloadController(3, 8).lowWaterMark(), "The low-water mark should never exceed the queue limit");
 	}
 
 	@Test
