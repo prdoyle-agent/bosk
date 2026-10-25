@@ -9,11 +9,15 @@ import static java.util.Objects.requireNonNull;
  *                           switches to overload mode; defaults to 1000. Raising the limit allows
  *                           more state snapshots to accumulate before coalescing, so it also raises
  *                           the queue's memory bound.
+ * @param hookExitThreshold  the fraction of {@code hookQueueMaxSize} below which the local driver
+ *                           may try standard mode again; defaults to 0.5. Lower values make the
+ *                           driver stay in overload mode longer before making another attempt.
  */
 public record BoskConfig<R extends StateTreeNode> (
 	DriverFactory<R> driverFactory,
 	RegistrarFactory registrarFactory,
-	int hookQueueMaxSize
+	int hookQueueMaxSize,
+	double hookExitThreshold
 ) {
 
 	public BoskConfig {
@@ -22,13 +26,23 @@ public record BoskConfig<R extends StateTreeNode> (
 		if (hookQueueMaxSize < 1) {
 			throw new IllegalArgumentException("hookQueueMaxSize must be positive");
 		}
+		if (!(hookExitThreshold > 0 && hookExitThreshold <= 1)) {
+			throw new IllegalArgumentException("hookExitThreshold must be greater than 0 and at most 1");
+		}
 	}
 
 	/**
-	 * Uses the default hook queue limit.
+	 * Uses the default hook exit threshold.
+	 */
+	public BoskConfig(DriverFactory<R> driverFactory, RegistrarFactory registrarFactory, int hookQueueMaxSize) {
+		this(driverFactory, registrarFactory, hookQueueMaxSize, DEFAULT_HOOK_EXIT_THRESHOLD);
+	}
+
+	/**
+	 * Uses the default hook queue limit and exit threshold.
 	 */
 	public BoskConfig(DriverFactory<R> driverFactory, RegistrarFactory registrarFactory) {
-		this(driverFactory, registrarFactory, DEFAULT_HOOK_QUEUE_MAX_SIZE);
+		this(driverFactory, registrarFactory, DEFAULT_HOOK_QUEUE_MAX_SIZE, DEFAULT_HOOK_EXIT_THRESHOLD);
 	}
 
 	/**
@@ -63,6 +77,7 @@ public record BoskConfig<R extends StateTreeNode> (
 		private DriverFactory<R> driverFactory;
 		private RegistrarFactory registrarFactory;
 		private int hookQueueMaxSize = DEFAULT_HOOK_QUEUE_MAX_SIZE;
+		private double hookExitThreshold = DEFAULT_HOOK_EXIT_THRESHOLD;
 
 		Builder() {
 			driverFactory = simpleDriver();
@@ -88,21 +103,32 @@ public record BoskConfig<R extends StateTreeNode> (
 			return this;
 		}
 
+		/**
+		 * Sets the fraction of {@code hookQueueMaxSize} below which the local driver
+		 * may try standard mode again.
+		 */
+		public Builder<R> hookExitThreshold(double hookExitThreshold) {
+			this.hookExitThreshold = hookExitThreshold;
+			return this;
+		}
+
 		public BoskConfig<R> build() {
 			return new BoskConfig<>(
 				this.driverFactory,
 				this.registrarFactory,
-				this.hookQueueMaxSize
+				this.hookQueueMaxSize,
+				this.hookExitThreshold
 			);
 		}
 
 		@Override
 		public String toString() {
-			return "BoskConfig.Builder(driverFactory=" + this.driverFactory + ", registrarFactory=" + this.registrarFactory + ", hookQueueMaxSize=" + this.hookQueueMaxSize + ")";
+			return "BoskConfig.Builder(driverFactory=" + this.driverFactory + ", registrarFactory=" + this.registrarFactory + ", hookQueueMaxSize=" + this.hookQueueMaxSize + ", hookExitThreshold=" + this.hookExitThreshold + ")";
 		}
 	}
 
 	private static final int DEFAULT_HOOK_QUEUE_MAX_SIZE = 1000;
+	private static final double DEFAULT_HOOK_EXIT_THRESHOLD = 0.5;
 	private static final DriverFactory<?> SIMPLE_DRIVER_FACTORY = (_, d) -> d;
 	private static final RegistrarFactory SIMPLE_REGISTRAR_FACTORY = (_, d) -> d;
 }
