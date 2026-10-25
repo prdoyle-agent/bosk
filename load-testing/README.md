@@ -138,7 +138,7 @@ The threshold is the memory bound. With a 64 MB heap, 10,000 and 20,000 queued e
 
 ### Backlog and probation
 
-The current controller replaces the two-small-batch rule. When the pending set drains and queued work remains, it runs a bounded standard-mode probation of up to `min(hookQueueMaxSize, 64)` hook executions initially. The probation succeeds only if at least half its starting backlog drains; otherwise the driver returns to overload. A successful probation runs one final coalesced catch-up generation before standard mode resumes, except when at most one queued execution remains. An early standard-mode overflow doubles the next probe budget, capped at 16x its base, and sustained standard-mode work decays it linearly.
+The current controller replaces the two-small-batch rule. When the pending set drains and queued work remains, it runs a bounded standard-mode probation of up to `min(hookQueueMaxSize, 64)` hook executions initially. The probation succeeds only if at least half its starting backlog drains; otherwise the driver returns to overload. A successful probation runs one final coalesced catch-up generation before standard mode resumes, except when at most one queued execution remains. An early standard-mode overflow doubles the next probe budget, capped at 10x its base, and sustained standard-mode work decays it linearly.
 
 A probe budget equal to the full queue limit still allowed a slow hook to spend tens of seconds draining a standard queue. Capping the base probe budget at 64 hook executions, and aborting early when a minimum sample shows no drain, bounds that tail. The probe budget still grows after a post-probation overflow and decays after sustained standard work.
 
@@ -146,11 +146,11 @@ With the capped budget, all runs below completed and verified. Each run emitted 
 
 | Threads | Hook | Scope | Entities | Duration | Throughput (ops/s) | Heap after | Result |
 |---:|---:|---|---:|---:|---:|---:|---|
-| 2 | 1 ms | root | 1,000 | 5 s | 2,463,968 | 32.0 MB | completed |
-| 4 | 1 ms | root | 1,000 | 10 s | 2,202,499 | 27.3 MB | completed |
-| 4 | 100 ms | root | 1,000 | 10 s | 2,161,368 | 35.9 MB | completed |
-| 4 | 1 ms | entity | 1,000 | 10 s | 924,230 | 13.1 MB | completed, 32 MB heap |
-| 4 | 1 ms | entity | 10,000 | 10 s | 746,686 | 46.5 MB | completed, 64 MB heap |
+| 2 | 1 ms | root | 1,000 | 5 s | 2,225,474 | 12.9 MB | completed |
+| 4 | 1 ms | root | 1,000 | 10 s | 2,177,067 | 35.8 MB | completed |
+| 4 | 100 ms | root | 1,000 | 10 s | 2,264,897 | 15.2 MB | completed |
+| 4 | 1 ms | entity | 1,000 | 10 s | 1,055,798 | 22.1 MB | completed, 32 MB heap |
+| 4 | 1 ms | entity | 10,000 | 10 s | 703,497 | 42.6 MB | completed, 64 MB heap |
 
 The saturated runs stay in overload mode for the whole measurement, as expected. The exit path is covered by unit tests, which exercise quiet backlog, a successful trial, a failed trial, and increasing backoff. A load phase that deliberately drops from overload to quiescence would be a useful addition to the harness.
 
