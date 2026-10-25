@@ -17,12 +17,13 @@ class OverloadControllerTest {
 	@Test
 	void startsInStandardModeWithABaseProbeBudget() {
 		assertEquals(STANDARD, controller.mode(), "A new controller should start in standard mode");
-		assertEquals(10, controller.probeBudget(), "The initial probe budget should be one queue's worth");
+		assertEquals(50, controller.probeBudget(), "The initial probe budget should be the fixed base value");
 	}
 
 	@Test
-	void baseProbeBudgetIsCappedForLargeQueues() {
-		assertEquals(64, new OverloadController(1000).probeBudget(), "Large queues should use the capped base probe budget");
+	void baseProbeBudgetIsFixed() {
+		assertEquals(50, new OverloadController(1000).probeBudget(), "Large queues should use the fixed base probe budget");
+		assertEquals(50, new OverloadController(10).probeBudget(), "Small queues should also use the fixed base probe budget");
 	}
 
 	@Test
@@ -30,14 +31,14 @@ class OverloadControllerTest {
 		controller.enterOverload();
 		controller.startProbation(5);
 		assertEquals(PROBATION, controller.mode(), "Starting a trial should enter probation mode");
-		assertEquals(10, controller.probeRemaining(), "The trial should use the base probe budget");
+		assertEquals(50, controller.probeRemaining(), "The trial should use the base probe budget");
 	}
 
 	@Test
 	void probationSucceedsWhenHalfTheBacklogDrains() {
 		controller.enterOverload();
 		controller.startProbation(10);
-		for (int i = 0; i < 9; i++) {
+		for (int i = 0; i < 49; i++) {
 			assertEquals(CONTINUE, controller.recordProbationExecution(5), "The trial should not finish early");
 		}
 		assertEquals(SUCCEEDED, controller.recordProbationExecution(5), "The trial should succeed after the budget");
@@ -48,7 +49,7 @@ class OverloadControllerTest {
 	void probationFailsWhenTheBacklogDoesNotDrain() {
 		controller.enterOverload();
 		controller.startProbation(10);
-		for (int i = 0; i < 9; i++) {
+		for (int i = 0; i < 49; i++) {
 			controller.recordProbationExecution(6);
 		}
 		assertEquals(FAILED, controller.recordProbationExecution(6), "The trial should fail without a clear drain");
@@ -59,7 +60,7 @@ class OverloadControllerTest {
 	void probationAbortsEarlyWhenTheBacklogIsNotDraining() {
 		controller.enterOverload();
 		controller.startProbation(10);
-		for (int i = 0; i < 7; i++) {
+		for (int i = 0; i < 4; i++) {
 			assertEquals(CONTINUE, controller.recordProbationExecution(10), "The trial should keep sampling");
 		}
 		assertEquals(FAILED, controller.recordProbationExecution(10), "A flat backlog should abort the trial");
@@ -78,7 +79,7 @@ class OverloadControllerTest {
 	void catchUpFinishesInStandardMode() {
 		controller.enterOverload();
 		controller.startProbation(10);
-		for (int i = 0; i < 9; i++) {
+		for (int i = 0; i < 49; i++) {
 			controller.recordProbationExecution(5);
 		}
 		controller.recordProbationExecution(5);
@@ -90,7 +91,7 @@ class OverloadControllerTest {
 	void catchUpFailureReturnsToOverload() {
 		controller.enterOverload();
 		controller.startProbation(10);
-		for (int i = 0; i < 9; i++) {
+		for (int i = 0; i < 49; i++) {
 			controller.recordProbationExecution(5);
 		}
 		controller.recordProbationExecution(5);
@@ -101,9 +102,9 @@ class OverloadControllerTest {
 	@Test
 	void earlyStandardOverflowDoublesTheProbeBudget() {
 		completeSuccessfulProbation();
-		assertEquals(10, controller.probeBudget(), "The base probe budget should be unchanged");
+		assertEquals(50, controller.probeBudget(), "The base probe budget should be unchanged");
 		controller.enterOverload();
-		assertEquals(20, controller.probeBudget(), "An early standard overflow should double the probe budget");
+		assertEquals(100, controller.probeBudget(), "An early standard overflow should double the probe budget");
 	}
 
 	@Test
@@ -113,20 +114,20 @@ class OverloadControllerTest {
 			controller.recordStandardExecution();
 		}
 		controller.enterOverload();
-		assertEquals(10, controller.probeBudget(), "A validated probe should not be extended by a later overflow");
+		assertEquals(50, controller.probeBudget(), "A validated probe should not be extended by a later overflow");
 	}
 
 	@Test
 	void probeBudgetDecaysAfterSustainedStandardWork() {
 		completeSuccessfulProbation();
 		controller.enterOverload();
-		assertEquals(20, controller.probeBudget(), "An early overflow should double the probe budget");
+		assertEquals(100, controller.probeBudget(), "An early overflow should double the probe budget");
 
 		completeSuccessfulProbation();
 		for (int i = 0; i < 20; i++) {
 			controller.recordStandardExecution();
 		}
-		assertEquals(19, controller.probeBudget(), "Sustained standard work should decay the probe budget linearly");
+		assertEquals(99, controller.probeBudget(), "Sustained standard work should decay the probe budget linearly");
 	}
 
 	@Test
@@ -135,7 +136,7 @@ class OverloadControllerTest {
 			completeSuccessfulProbation();
 			controller.enterOverload();
 		}
-		assertEquals(160, controller.probeBudget(), "Probe budget growth should be capped at 16x the base");
+		assertEquals(500, controller.probeBudget(), "Probe budget growth should be capped at 10x the base");
 	}
 
 	@Test
@@ -144,7 +145,7 @@ class OverloadControllerTest {
 		controller.startProbation(10);
 		controller.returnToOverload();
 		assertEquals(OVERLOAD, controller.mode(), "An interrupted trial should return to overload mode");
-		assertEquals(10, controller.probeBudget(), "An interrupted trial should not change the probe budget");
+		assertEquals(50, controller.probeBudget(), "An interrupted trial should not change the probe budget");
 	}
 
 	private void completeSuccessfulProbation() {

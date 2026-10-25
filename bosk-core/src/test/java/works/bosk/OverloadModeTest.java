@@ -204,12 +204,13 @@ public class OverloadModeTest extends AbstractBoskTest {
 
 		trialBosk.driver().submitReplacement(stringRef, "v5");
 		assertEquals(PROBATION, trialBosk.hookMode(), "The first queued update should start a trial");
-		trialBosk.driver().submitReplacement(stringRef, "v6");
-		trialBosk.driver().submitReplacement(stringRef, "v7");
+		for (int i = 6; i <= 54; i++) {
+			trialBosk.driver().submitReplacement(stringRef, "v" + i);
+		}
 
 		assertEquals(STANDARD, trialBosk.hookMode(), "A completed trial should enter standard mode");
-		assertEquals(List.of("v1", "v4", "v5", "v6", "v7"), hook.seen,
-			"The trial should deliver each remaining update separately");
+		assertEquals(52, hook.seen.size(), "The trial should deliver every update separately");
+		assertEquals("v54", hook.seen.getLast(), "The last standard-mode hook should see the latest value");
 	}
 
 	@Test

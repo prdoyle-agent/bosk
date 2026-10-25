@@ -605,7 +605,7 @@ It can be changed with `BoskConfig.builder().hookQueueMaxSize(...)`.
 Before the limit is reached, the queue still holds one execution per update, so the limit is also a memory bound; raising it allows more state snapshots to accumulate before coalescing.
 
 Once overload mode begins, Bosk periodically runs a bounded probation in standard style when the pending set has drained and the queue has work.
-The probation lasts for at most `min(hookQueueMaxSize, 64)` hook executions initially, with a minimum of one.
+The probation lasts for at most 50 hook executions initially.
 It succeeds only if at least half of its starting backlog has drained by the end; otherwise Bosk returns to overload mode.
 After a small minimum sample, Bosk also aborts the probation if the backlog has not decreased at all.
 The queue limit remains the hard memory bound, and reaching it during probation fails the probation immediately.
@@ -614,7 +614,7 @@ A successful probation is followed by one final overload-mode catch-up generatio
 If at most one queued execution remains, that catch-up is skipped because there is nothing to coalesce.
 
 If standard mode overflows soon after a successful probation, the next probation is longer.
-The probe budget doubles after each such early overflow, up to sixteen times its base value.
+The probe budget doubles after each such early overflow, up to ten times its base value.
 After sustained standard-mode work, the probe budget decays linearly back toward its base value, so a burst from the distant past does not affect the server forever.
 
 A hook that must observe every intermediate update cannot use overload mode safely; that requires a separate delivery policy.
