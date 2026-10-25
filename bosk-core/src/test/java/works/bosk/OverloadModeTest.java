@@ -200,13 +200,14 @@ public class OverloadModeTest extends AbstractBoskTest {
 		updater.join(10_000);
 		assertFalse(updater.isAlive(), "The updating thread should finish");
 		assertEquals(List.of("v1", "v4"), hook.seen, "The overload batch should report only the latest state");
-		assertEquals(PROBATION, trialBosk.hookMode(), "A quiet backlog should start a standard-mode trial");
+		assertEquals(OVERLOAD, trialBosk.hookMode(), "The empty queue should leave the driver in overload mode");
 
 		trialBosk.driver().submitReplacement(stringRef, "v5");
+		assertEquals(PROBATION, trialBosk.hookMode(), "The first queued update should start a trial");
 		trialBosk.driver().submitReplacement(stringRef, "v6");
 		trialBosk.driver().submitReplacement(stringRef, "v7");
 
-		assertEquals(STANDARD, trialBosk.hookMode(), "A completed trial should commit to standard mode");
+		assertEquals(STANDARD, trialBosk.hookMode(), "A completed trial should enter standard mode");
 		assertEquals(List.of("v1", "v4", "v5", "v6", "v7"), hook.seen,
 			"The trial should deliver each remaining update separately");
 	}
@@ -225,25 +226,25 @@ public class OverloadModeTest extends AbstractBoskTest {
 		trialBosk.hookRegistrar().registerHook("string", stringRef, hook);
 		hook.seen.clear();
 
-		startOverloadAndDrainToProbation(trialBosk, stringRef, hook);
-		assertEquals(PROBATION, trialBosk.hookMode(), "The quiet backlog should start a trial");
+		startOverloadAndDrainToOverload(trialBosk, stringRef, hook);
+		assertEquals(OVERLOAD, trialBosk.hookMode(), "The empty queue should leave the driver in overload mode");
 
 		hook.blockNext();
 		Thread updater = new Thread(() -> trialBosk.driver().submitReplacement(stringRef, "v8"));
 		updater.start();
 		hook.awaitStarted();
+		assertEquals(PROBATION, trialBosk.hookMode(), "The first queued update should start a trial");
 
 		trialBosk.driver().submitReplacement(stringRef, "v9");
 		trialBosk.driver().submitReplacement(stringRef, "v10");
 		trialBosk.driver().submitReplacement(stringRef, "v11");
-		trialBosk.driver().submitReplacement(stringRef, "v12");
 
 		assertEquals(OVERLOAD, trialBosk.hookMode(), "Overflowing during a trial should return to overload mode");
 
 		hook.unblock();
 		updater.join(10_000);
 		assertFalse(updater.isAlive(), "The updating thread should finish");
-		assertEquals(List.of("v1", "v4", "v8", "v12"), hook.seen,
+		assertEquals(List.of("v1", "v4", "v8", "v11"), hook.seen,
 			"The failed trial should coalesce the queued updates into the latest state");
 		assertEquals(OVERLOAD, trialBosk.hookMode(), "A failed trial should stay in overload mode");
 	}
@@ -280,7 +281,7 @@ public class OverloadModeTest extends AbstractBoskTest {
 		assertTrue(secondHookRan.await(10, SECONDS), "The unrun hook should be requeued and run later");
 	}
 
-	private static void startOverloadAndDrainToProbation(Bosk<TestRoot> bosk, Reference<String> stringRef, BlockingHook hook) throws InterruptedException {
+	private static void startOverloadAndDrainToOverload(Bosk<TestRoot> bosk, Reference<String> stringRef, BlockingHook hook) throws InterruptedException {
 		hook.blockNext();
 		Thread updater = new Thread(() -> bosk.driver().submitReplacement(stringRef, "v1"));
 		updater.start();
