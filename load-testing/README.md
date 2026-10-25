@@ -138,19 +138,19 @@ The threshold is the memory bound. With a 64 MB heap, 10,000 and 20,000 queued e
 
 ### Backlog and probation
 
-The current controller replaces the two-small-batch rule. When the pending set drains and queued work remains, it runs a bounded standard-mode probation of up to `min(hookQueueMaxSize, 64)` hook executions initially. The probation succeeds only if at least half its starting backlog drains; otherwise the driver returns to overload. A successful probation runs one final coalesced catch-up generation before standard mode resumes, except when at most one queued execution remains. An early standard-mode overflow doubles the next probe budget, capped at 10x its base, and sustained standard-mode work decays it linearly.
+The current controller replaces the two-small-batch rule. When the pending set drains and queued work remains, it runs a bounded standard-mode probation of up to `min(hookQueueMaxSize, 64)` hook executions initially. The probation succeeds only if at least half its starting backlog drains; otherwise the driver returns to overload. A successful probation runs one final coalesced catch-up generation before standard mode resumes, except when at most one queued execution remains. An early standard-mode overflow doubles the next probe multiplier without a cap, and sustained standard-mode work decays the multiplier linearly.
 
-A probe budget equal to the full queue limit still allowed a slow hook to spend tens of seconds draining a standard queue. Capping the base probe budget at 64 hook executions, and aborting early when a minimum sample shows no drain, bounds that tail. The probe budget still grows after a post-probation overflow and decays after sustained standard work.
+A probe budget equal to the full queue limit still allowed a slow hook to spend tens of seconds draining a standard queue. Using one queue length as the probe budget ties the probation duration to the user's configured backlog tolerance. The multiplier still grows after a post-probation overflow and decays after sustained standard work.
 
-With the capped budget, all runs below completed and verified. Each run emitted one overload warning and did not repeat it.
+A 100 ms hook with a 1,000-entry queue limit makes a full probation take about 100 seconds. A 2 s run took 96 s wall-clock to finish because the post-measurement drain was standard-style. That is the user's declared backlog tolerance in action. If it is too slow, the queue limit should be lower.
 
-| Threads | Hook | Scope | Entities | Duration | Throughput (ops/s) | Heap after | Result |
-|---:|---:|---|---:|---:|---:|---:|---|
-| 2 | 1 ms | root | 1,000 | 5 s | 2,225,474 | 12.9 MB | completed |
-| 4 | 1 ms | root | 1,000 | 10 s | 2,177,067 | 35.8 MB | completed |
-| 4 | 100 ms | root | 1,000 | 10 s | 2,264,897 | 15.2 MB | completed |
-| 4 | 1 ms | entity | 1,000 | 10 s | 1,055,798 | 22.1 MB | completed, 32 MB heap |
-| 4 | 1 ms | entity | 10,000 | 10 s | 703,497 | 42.6 MB | completed, 64 MB heap |
+All runs below completed and verified. Each run emitted one overload warning and did not repeat it.
+
+| Threads | Hook | Scope | Entities | Duration | Throughput (ops/s) | Heap after | Wall-clock |
+|---:|---:|---|---:|---:|---:|---:|---:|
+| 4 | 1 ms | root | 1,000 | 10 s | 1,950,607 | 49.1 MB | 13 s |
+| 4 | 100 ms | root | 1,000 | 2 s | 2,140,666 | 47.1 MB | 96 s |
+| 4 | 1 ms | entity | 10,000 | 10 s | 741,831 | 25.7 MB | 30 s |
 
 The saturated runs stay in overload mode for the whole measurement, as expected. The exit path is covered by unit tests, which exercise quiet backlog, a successful trial, a failed trial, and increasing backoff. A load phase that deliberately drops from overload to quiescence would be a useful addition to the harness.
 
