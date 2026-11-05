@@ -2,8 +2,10 @@ package works.bosk.drivers.mongo.internal;
 
 import com.mongodb.MongoClientSettings;
 import com.mongodb.MongoException;
+import com.mongodb.TransactionOptions;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.TransactionBody;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import com.mongodb.client.result.UpdateResult;
@@ -48,6 +50,7 @@ import works.bosk.drivers.mongo.status.MongoStatus;
 import works.bosk.exceptions.FlushFailureException;
 import works.bosk.exceptions.InvalidTypeException;
 import works.bosk.exceptions.RetryableFlushException;
+import works.bosk.exceptions.RetryableUpdateException;
 import works.bosk.logging.MappedDiagnosticContext.MDCScope;
 
 import static com.mongodb.MongoException.TRANSIENT_TRANSACTION_ERROR_LABEL;
@@ -832,9 +835,13 @@ public final class MainDriver<R extends StateTreeNode> implements MongoDriver {
 	 * which doesn't declare checked exceptions.
 	 */
 	private void doRetryableUpdateOperation(Runnable operation, String description, Object... args) {
-		doRetryableDriverOperation(
-			formatDriverInUse -> () -> runWithManualCommit(operation::run, formatDriverInUse, description),
-			description, args);
+		doRetryableDriverOperation(formatDriverInUse -> () -> {
+			if (formatDriver.updatesAreTransactional()) {
+				runUpdateInClientLibraryTransaction(operation, formatDriverInUse, description);
+			} else {
+				runWithManualCommit(operation::run, formatDriverInUse, description);
+			}
+		}, description, args);
 	}
 
 	private <X extends Exception, Y extends Exception> void doRetryableDriverOperation(RetryableOperation<X,Y> operation, String description, Object... args) throws X,Y {
@@ -856,6 +863,8 @@ public final class MainDriver<R extends StateTreeNode> implements MongoDriver {
 			RetryableOperation<X,Y> operation = operationFactory.apply(formatDriverInUse);
 			try {
 				operation.run();
+			} catch (RetryableUpdateException e) {
+				throw e;
 			} catch (DisconnectedException e) {
 				LOGGER.debug("Driver is disconnected; will wait and retry operation ({})", e.getMessage());
 				waitAndRetry(operation, description, args);
@@ -883,8 +892,12 @@ public final class MainDriver<R extends StateTreeNode> implements MongoDriver {
 	/**
 	 * Runs an operation with a session whose commit we manage ourselves.
 	 * <p>
-	 * Used by updates and by refurbish, which must commit before it publishes
-	 * the new format driver.
+	 * Used by Sequoia updates, whose single-document writes don't need a
+	 * transaction, and by refurbish, which must commit before it publishes the
+	 * new format driver.
+	 * <p>
+	 * Pando updates use {@link #runUpdateInClientLibraryTransaction} instead, where
+	 * MongoDB's client library owns the transaction.
 	 */
 	private <X extends Exception, Y extends Exception> void runWithManualCommit(RetryableOperation<X,Y> operation, FormatDriver<R> formatDriverInUse, String description) throws X,Y {
 		int immediateRetriesLeft = 2;
@@ -915,6 +928,94 @@ public final class MainDriver<R extends StateTreeNode> implements MongoDriver {
 			}
 			break;
 		}
+	}
+
+	/**
+	 * Runs an update inside a transaction owned by MongoDB's client library
+	 * via {@link com.mongodb.client.ClientSession#withTransaction}.
+	 * <p>
+	 * The client library starts the transaction, retries the whole body when it
+	 * sees a transient transaction error, retries commits whose result is
+	 * unknown, and gives up when the transaction options' {@code timeoutMS}
+	 * budget is exhausted. If the budget was exhausted by write conflicts, we
+	 * raise {@link RetryableUpdateException} without disconnecting. Other
+	 * failures, including connectivity outages, take the usual disconnect path.
+	 */
+	private void runUpdateInClientLibraryTransaction(Runnable operation, FormatDriver<R> formatDriverInUse, String description) {
+		try (var session = queryCollection.newSession()) {
+			queryCollection.withTransaction(updateTransactionOptions(), updateTransactionBody(operation));
+		} catch (FailedMongoClientSessionException e) {
+			setDisconnectedDriver(e, formatDriverInUse);
+			throw new DisconnectedException(e);
+		} catch (MongoException e) {
+			throw updateFailure(e, formatDriverInUse, description);
+		}
+	}
+
+	/**
+	 * The transaction body. MongoDB's client library must see any
+	 * {@link MongoException} so it can inspect the error labels and decide
+	 * whether to retry the transaction; other exceptions propagate unchanged.
+	 */
+	private TransactionBody<Void> updateTransactionBody(Runnable operation) {
+		return () -> {
+			try {
+				operation.run();
+				return null;
+			} catch (MongoException e) {
+				LOGGER.debug("Transaction body failed; leaving the retry decision to MongoDB's client library", e);
+				throw e;
+			}
+		};
+	}
+
+	/**
+	 * Chooses the exception that the update path should throw for a failed
+	 * transaction. Write-conflict exhaustion is retryable and leaves the Bosk
+	 * driver connected; everything else is a database-health failure that
+	 * disconnects.
+	 */
+	private RuntimeException updateFailure(MongoException e, FormatDriver<R> formatDriverInUse, String description) {
+		if (e.hasErrorLabel(TRANSIENT_TRANSACTION_ERROR_LABEL) && isWriteConflict(e)) {
+			// The transaction kept losing to other writers. That's contention,
+			// not a database-health problem, so leave the Bosk driver connected and
+			// let the caller retry later.
+			LOGGER.warn("Exhausted transaction conflict retries for {} after {} ms", description, timescaleMS, e);
+			return new RetryableUpdateException(
+				"Unable to complete update after transaction conflict retries",
+				e, Duration.ofMillis(timescaleMS));
+		}
+		LOGGER.debug("MongoException is not recoverable; disconnecting", e);
+		logTimeoutDiagnostics(description, e);
+		setDisconnectedDriver(e, formatDriverInUse);
+		return new DisconnectedException(e);
+	}
+
+	/**
+	 * The client library's {@code withTransaction} treats {@code timeoutMS} as
+	 * the total budget for all attempts, which matches the intent of
+	 * {@code timescaleMS}.
+	 */
+	private TransactionOptions updateTransactionOptions() {
+		return TransactionOptions.builder()
+			.timeout(timescaleMS, MILLISECONDS)
+			.build();
+	}
+
+	/**
+	 * The client library's {@code withTransaction} puts the
+	 * transient-transaction-error label on connectivity failures as well as on
+	 * write conflicts, but a connectivity failure means the change receiver is
+	 * probably broken and must still take the disconnect path. Only a genuine
+	 * write conflict is safe to report as a retryable update.
+	 */
+	private static boolean isWriteConflict(Throwable e) {
+		for (Throwable t = e; t != null; t = t.getCause()) {
+			if (t instanceof MongoException m && m.getCode() == WRITE_CONFLICT_CODE) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	private <X extends Exception, Y extends Exception> void waitAndRetry(RetryableOperation<X, Y> operation, String description, Object... args) throws X, Y {
@@ -1091,6 +1192,7 @@ public final class MainDriver<R extends StateTreeNode> implements MongoDriver {
 	}
 
 	public static final BsonString MANIFEST_ID = new BsonString("!Manifest");
+	private static final int WRITE_CONFLICT_CODE = 112;
 	private static final Exception FAILURE_TO_COMPUTE_INITIAL_STATE = new IllegalStateException("Failure to compute initial state");
 	private static final Logger LOGGER = LoggerFactory.getLogger(MainDriver.class);
 	private static final Logger UNINITIALIZED_COLLECTION_LOGGER = LoggerFactory.getLogger(UNINITIALIZED_COLLECTION_LOGGER_NAME);
