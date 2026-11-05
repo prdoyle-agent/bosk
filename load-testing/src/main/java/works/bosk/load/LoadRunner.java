@@ -77,6 +77,11 @@ public final class LoadRunner {
 				.hookQueueMaxSize(config.hookQueueMaxSize())
 				.build());
 		workload.initialize(bosk);
+		boolean profile = mongo != null && Boolean.getBoolean("load.profile");
+		if (profile) {
+			mongo.startProfiling(MONGO_DATABASE);
+		}
+		CommandTimer.INSTANCE.reset();
 		AtomicBoolean hookActive = new AtomicBoolean(false);
 		registerHooks(bosk, config, hookActive);
 		hookActive.set(true);
@@ -120,6 +125,7 @@ public final class LoadRunner {
 			start.countDown();
 			Thread.sleep(config.warmup());
 			sampler.start();
+			CommandTimer.INSTANCE.reset();
 			measuring.set(true);
 			measureStart = System.nanoTime();
 			Thread.sleep(config.duration());
@@ -135,6 +141,10 @@ public final class LoadRunner {
 				worker.interrupt();
 			}
 			throw e;
+		}
+
+		if (profile) {
+			mongo.dumpProfile(MONGO_DATABASE, MONGO_COLLECTION, runId);
 		}
 
 		long heapUsedAfter = JvmMetrics.heapUsed();
@@ -161,6 +171,10 @@ public final class LoadRunner {
 			ops += opCount;
 		}
 		long measuredNanos = Math.max(0, measureEnd - measureStart);
+
+		if (mongo != null) {
+			System.out.println(CommandTimer.INSTANCE.summary());
+		}
 
 		return new LoadResult(
 			runId,

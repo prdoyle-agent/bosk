@@ -589,9 +589,11 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 			LOGGER.debug("| Pre-delete on root document");
 			String key = BsonFormatter.dottedFieldNameOf(target, rootRef);
 			LOGGER.debug("| Pre-delete field {}", key);
-			doUpdate( // Important: don't bump the revision field because that's how we identify the last event in a transaction
-				new BsonDocument("$unset", new BsonDocument(key, BsonNull.VALUE)),
-				standardRootPreconditions(target));
+			if (!Boolean.getBoolean("bosk.mongo.skipPreDelete")) {
+				doUpdate( // Important: don't bump the revision field because that's how we identify the last event in a transaction
+					preDeleteOrSentinel(key, value),
+					standardRootPreconditions(target));
+			}
 			LOGGER.debug("| Update root document");
 			boolean applied = doUpdate(replacementDoc(target, value, rootRef), standardRootPreconditions(target));
 			if (!applied) {
@@ -625,8 +627,9 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 			// Update part of the main doc (which must already exist)
 			String key = BsonFormatter.dottedFieldNameOf(target, mainRef);
 			LOGGER.debug("| Pre-delete field {} in {}", key, mainRef);
-			BsonDocument preDelete = new BsonDocument("$unset", new BsonDocument(key, BsonNull.VALUE));
-			doUpdate(preDelete, standardPreconditions(target, mainRef, filter));
+			if (!Boolean.getBoolean("bosk.mongo.skipPreDelete")) {
+				doUpdate(preDeleteOrSentinel(key, value), standardPreconditions(target, mainRef, filter));
+			}
 			LOGGER.debug("| Set field {} in {}: {}", key, mainRef, value);
 			BsonDocument mainUpdate = new BsonDocument("$set", new BsonDocument(key, value));
 			// If the main document doesn't exist (or its structure doesn't match), the
@@ -732,6 +735,24 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 
 	private <T> BsonDocument standardRootPreconditions(Reference<T> target) {
 		return standardPreconditions(target, rootRef, documentFilter(rootRef));
+	}
+
+	/**
+	 * Diagnostic prototype: force a change event without changing the document length.
+	 * For an ASCII string, set a same-length sentinel value instead of $unset.
+	 * The sentinel event is a prior event in the transaction and is not applied downstream;
+	 * the main update immediately overwrites it with the real value.
+	 */
+	private static BsonDocument preDeleteOrSentinel(String key, BsonValue value) {
+		if (value instanceof BsonString string) {
+			String text = string.getValue();
+			if (!text.isEmpty() && text.chars().allMatch(c -> c < 128)) {
+				char[] chars = text.toCharArray();
+				chars[0] = chars[0] == 'a' ? 'b' : 'a';
+				return new BsonDocument("$set", new BsonDocument(key, new BsonString(new String(chars))));
+			}
+		}
+		return new BsonDocument("$unset", new BsonDocument(key, BsonNull.VALUE));
 	}
 
 	private <T> BsonDocument standardPreconditions(Reference<T> target, Reference<?> startingRef, BsonDocument filter) {
