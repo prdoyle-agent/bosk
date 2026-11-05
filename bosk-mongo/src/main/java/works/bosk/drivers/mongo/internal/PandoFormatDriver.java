@@ -579,19 +579,22 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 		LOGGER.debug("doReplacement({})", target);
 		Reference<?> mainRef = mainRef(target);
 		BsonValue value = formatter.object2bsonValue(newValue, target.targetType());
+		boolean hasSubParts = false;
 		if (value instanceof BsonDocument b) {
 			deletePartsUnder(target);
-			upsertAndRemoveSubParts(target, b);
+			hasSubParts = upsertAndRemoveSubParts(target, b);
 			// Note that value will now have the sub-parts removed
 		}
 		if (rootRef.equals(mainRef)) {
 			LOGGER.debug("| Root ref is main ref");
-			LOGGER.debug("| Pre-delete on root document");
-			String key = BsonFormatter.dottedFieldNameOf(target, rootRef);
-			LOGGER.debug("| Pre-delete field {}", key);
-			doUpdate( // Important: don't bump the revision field because that's how we identify the last event in a transaction
-				new BsonDocument("$unset", new BsonDocument(key, BsonNull.VALUE)),
-				standardRootPreconditions(target));
+			if (hasSubParts) {
+				LOGGER.debug("| Pre-delete on root document");
+				String key = BsonFormatter.dottedFieldNameOf(target, rootRef);
+				LOGGER.debug("| Pre-delete field {}", key);
+				doUpdate( // Important: don't bump the revision field because that's how we identify the last event in a transaction
+					new BsonDocument("$unset", new BsonDocument(key, BsonNull.VALUE)),
+					standardRootPreconditions(target));
+			}
 			LOGGER.debug("| Update root document");
 			boolean applied = doUpdate(replacementDoc(target, value, rootRef), standardRootPreconditions(target));
 			if (!applied) {
@@ -601,6 +604,7 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 		} else {
 // Note: don't use mainPart's ID. TODO: Is this ok? Why is the ID wrong?
 			BsonDocument filter = documentFilter(mainRef);
+			boolean preDeleteIsStub = false;
 			if (target.equals(mainRef)) {
 				// Upsert the main doc
 				// TODO: merge this with the same code in upsertAndRemoveSubParts
@@ -619,14 +623,17 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 				mainRef = mainRef(mainRef.enclosingReference(Object.class));
 				filter = documentFilter(mainRef);
 				value = TRUE;
+				preDeleteIsStub = true;
 				LOGGER.debug("| Move up to enclosing main reference {}", mainRef);
 			}
 
 			// Update part of the main doc (which must already exist)
 			String key = BsonFormatter.dottedFieldNameOf(target, mainRef);
-			LOGGER.debug("| Pre-delete field {} in {}", key, mainRef);
-			BsonDocument preDelete = new BsonDocument("$unset", new BsonDocument(key, BsonNull.VALUE));
-			doUpdate(preDelete, standardPreconditions(target, mainRef, filter));
+			if (preDeleteIsStub || hasSubParts) {
+				LOGGER.debug("| Pre-delete field {} in {}", key, mainRef);
+				BsonDocument preDelete = new BsonDocument("$unset", new BsonDocument(key, BsonNull.VALUE));
+				doUpdate(preDelete, standardPreconditions(target, mainRef, filter));
+			}
 			LOGGER.debug("| Set field {} in {}: {}", key, mainRef, value);
 			BsonDocument mainUpdate = new BsonDocument("$set", new BsonDocument(key, value));
 			// If the main document doesn't exist (or its structure doesn't match), the
@@ -880,7 +887,7 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 	/**
 	 * @param value is mutated to stub-out the parts written to the database
 	 */
-	private <T> void upsertAndRemoveSubParts(Reference<T> target, BsonDocument value) {
+	private <T> boolean upsertAndRemoveSubParts(Reference<T> target, BsonDocument value) {
 		List<BsonDocument> allParts = scatter(target, value);
 		// NOTE: `value` has now been mutated so the parts have been stubbed out
 
@@ -898,6 +905,7 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 			LOGGER.debug("| Insert result: {}", result);
 		}
 
+		return !subParts.isEmpty();
 	}
 
 	@Override
