@@ -52,6 +52,7 @@ import static java.util.Collections.singletonList;
 import static java.util.Comparator.comparing;
 import static java.util.stream.Collectors.toCollection;
 import static java.util.stream.Collectors.toList;
+import static org.bson.BsonBoolean.FALSE;
 import static org.bson.BsonBoolean.TRUE;
 import static works.bosk.Path.parseParameterized;
 import static works.bosk.drivers.mongo.internal.BsonFormatter.docBsonPath;
@@ -631,7 +632,9 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 			String key = BsonFormatter.dottedFieldNameOf(target, mainRef);
 			if (preDeleteIsStub || hasSubParts) {
 				LOGGER.debug("| Pre-delete field {} in {}", key, mainRef);
-				BsonDocument preDelete = new BsonDocument("$unset", new BsonDocument(key, BsonNull.VALUE));
+				BsonDocument preDelete = preDeleteIsStub
+					? new BsonDocument("$set", new BsonDocument(key, FALSE))
+					: new BsonDocument("$unset", new BsonDocument(key, BsonNull.VALUE));
 				doUpdate(preDelete, standardPreconditions(target, mainRef, filter));
 			}
 			LOGGER.debug("| Set field {} in {}: {}", key, mainRef, value);
