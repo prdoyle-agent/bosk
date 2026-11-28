@@ -518,6 +518,10 @@ abstract non-sealed class AbstractFormatDriver<R extends StateTreeNode> implemen
 	 * @see <a href="https://www.mongodb.com/docs/manual/changeStreams/#event-notification">MongoDB change streams: Event Notification</a>
 	 */
 	private void awaitCaughtUpTo(BsonTimestamp startPosition, long deadlineNanos) throws FlushFailureException, InterruptedException {
+		// The probes use the query client rather than the change-stream client.
+		// Every flush waits for ChangeReceiver, so a flood of flushes competing with it
+		// for change-stream connections could mean we never catch up.
+		// Slowing the pace of updates instead actually tends to help us catch up.
 		checkDeadline(deadlineNanos);
 		try {
 			try (var backlogProbe = collection.fromPrimary().watch(List.of(
