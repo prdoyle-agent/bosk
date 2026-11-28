@@ -5,6 +5,7 @@ import com.mongodb.MongoException;
 import com.mongodb.TransactionOptions;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.mongodb.client.MongoCollection;
 import com.mongodb.client.TransactionBody;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
@@ -79,6 +80,7 @@ public final class MainDriver<R extends StateTreeNode> implements MongoDriver {
 	private final BoskDriver downstream;
 	private final Deque<Closeable> closeables = new ArrayDeque<>();
 	private final SessionCollection queryCollection;
+	private final MongoCollection<BsonDocument> changeStreamCollection;
 	private final MongoClient queryClient;
 	private final Listener listener;
 	private final AtomicBoolean loggedConnectionDiagnostics = new AtomicBoolean(false);
@@ -232,6 +234,9 @@ public final class MainDriver<R extends StateTreeNode> implements MongoDriver {
 			this.queryCollection = SessionCollection.of(queryClient
 				.getDatabase(driverSettings.database())
 				.getCollection(driverSettings.collection(), BsonDocument.class), queryClient, testProbes.findInterceptor(), testProbes.writeInterceptor(), testProbes.commitInterceptor(), testProbes.sessionInterceptor());
+			this.changeStreamCollection = changeStreamClient
+				.getDatabase(driverSettings.database())
+				.getCollection(driverSettings.collection(), BsonDocument.class);
 			FormatDriver<R> initialFormatDriver = new DisconnectedDriver<>(new Exception("Driver not yet initialized"));
 			this.drivers = new Drivers<>(initialFormatDriver, newUpdateDriver(initialFormatDriver), Optional.empty());
 			LOGGER.debug("Using database \"{}\" collection \"{}\"", driverSettings.database(), driverSettings.collection());
@@ -253,9 +258,7 @@ public final class MainDriver<R extends StateTreeNode> implements MongoDriver {
 				listener,
 				driverSettings,
 				clients.changeStreamMaxAwaitTimeMS(),
-				changeStreamClient
-					.getDatabase(driverSettings.database())
-					.getCollection(driverSettings.collection(), BsonDocument.class)
+				changeStreamCollection
 			);
 		}
 
@@ -908,6 +911,7 @@ public final class MainDriver<R extends StateTreeNode> implements MongoDriver {
 			case SequoiaFormat _ -> new SequoiaFormatDriver<>(
 				boskInfo,
 				queryCollection,
+				changeStreamCollection,
 				driverSettings,
 				bsonSerializer,
 				flushTimeout,
@@ -917,6 +921,7 @@ public final class MainDriver<R extends StateTreeNode> implements MongoDriver {
 			case PandoFormat pandoFormat -> new PandoFormatDriver<>(
 				boskInfo,
 				queryCollection,
+				changeStreamCollection,
 				driverSettings,
 				pandoFormat,
 				bsonSerializer,

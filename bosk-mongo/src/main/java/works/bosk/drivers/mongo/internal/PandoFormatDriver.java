@@ -1,5 +1,6 @@
 package works.bosk.drivers.mongo.internal;
 
+import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.CountOptions;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.model.UpdateOptions;
@@ -87,6 +88,7 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 	PandoFormatDriver(
 		BoskInfo<R> boskInfo,
 		SessionCollection collection,
+		MongoCollection<BsonDocument> changeStreamCollection,
 		MongoDriverSettings driverSettings,
 		PandoFormat format,
 		BsonSerializer bsonSerializer,
@@ -99,6 +101,7 @@ final class PandoFormatDriver<R extends StateTreeNode> extends AbstractFormatDri
 			boskInfo.context(),
 			new Formatter(boskInfo, bsonSerializer),
 			collection,
+			changeStreamCollection,
 			downstream,
 			flushTimeout,
 			epoch

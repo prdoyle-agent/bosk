@@ -62,6 +62,7 @@ class PandoUpdateClassificationTest {
 		driver = new PandoFormatDriver<>(
 			bosk,
 			SessionCollection.of(raw, client),
+			raw,
 			MongoDriverSettings.builder().preferredDatabaseFormat(format).build(),
 			format,
 			new BsonSerializer(),

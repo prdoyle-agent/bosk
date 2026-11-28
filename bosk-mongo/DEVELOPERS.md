@@ -308,8 +308,10 @@ The write a Pando flush waits for is a `last:` write; in Sequoia it is the
 root document write.
 An acknowledged write is already in the oplog when `flush()` begins, because
 writes use `WriteConcern.MAJORITY` and change streams report only
-majority-committed changes; the probe starts at the barrier position, so it
-covers anything the receiver has not submitted yet.
+majority-committed changes. When a probe cursor is created it starts at the
+barrier position, so it covers anything the receiver has not submitted yet; a
+cursor reused from an earlier round resumes where it left off, and its empty
+`tryNext` means nothing after that position is outstanding.
 A write made directly to the database is outside that guarantee: if it is invalid,
 the receiver eventually rejects it and reloads, but a flush need not wait for that.
 
@@ -319,7 +321,8 @@ only node guaranteed to reflect them all; a secondary can trail writes the clien
 has already seen acknowledged, and a flush that read from one could return before
 those writes were applied.
 So `SessionCollection.fromPrimary` sets the read preference explicitly instead of
-inheriting the client's, and the epoch check and the probes both go through it.
+inheriting the client's; the epoch check goes through it, and the probes pin the
+primary on the change-stream client's collection the same way.
 The epoch check uses `findLatest`, a local read of the primary; the probes are
 change streams, which report only majority-committed changes.
 That's the strength a flush needs, because a write is acknowledged only once a
@@ -329,6 +332,19 @@ read on a lagging secondary is still durable, and still behind.
 Everything else, including the `ChangeReceiver`'s stream, follows the client's
 configured read preference: a secondary there costs flush latency, because the
 receiver falls behind, but not correctness.
+
+The probe's cursor is shared, rather than created per flush, and it lives on the
+change-stream client: the query client's operation timeout is a cursor-lifetime
+budget, so a cursor that is reused across flushes can outlive it. Reads are
+batched into rounds. A flush that finds a round in progress waits for the next
+one, and the next round's leader does one target-discovery pass on behalf of
+every flush that was waiting when it started. That is sound without any client
+clocks: a round's observation happens after all of its members arrived, so it
+covers all of their writes. A round whose `tryNext` returns an empty batch has
+reached the present. Whenever the backlog returned any event, the round also
+opens one arrival probe, whose event necessarily postdates the round and so
+supplies a position that covers every member. When a round ends with no flush
+waiting, the cursor closes, so an idle bosk holds no probe cursor at all.
 
 Pando treats a deletion of the root state document as disruptive: `onEvent`
 throws, and the receiver reconnects and reloads. Outside a refurbish, Bosk never
@@ -416,7 +432,7 @@ itself, and that time is what `onEvent` filters on.
 In summary, these are the division of responsibilities among the components:
 1. All format-specific logic is in `FormatDriver`
 2. For format-independent logic:
-- All change stream cursor lifecycle logic is in `ChangeReceiver`
+- All change stream cursor lifecycle logic is in `ChangeReceiver` and `FlushProbe`
 - Everything that affects driver method implementation logic is in `MainDriver`
 	- The foreground thread logic, implementing the driver methods, is in `MainDriver` itself
 	- The background thread logic, implementing the _effects_ of change stream occurrences on driver methods, is in `MainDriver.Listener`, which implements `ChangeListener`
@@ -446,7 +462,9 @@ For a same-format refurbish, the state document is deleted and rewritten,
 so both formats reload and pick up the new state.
 
 `MainDriver` and `ChangeReceiver` have a lifetime that coincides with that of the `Bosk`.
-`FormatDriver` and `FlushBarrier` have a lifetime that coincides with that of the cursor.
+`FormatDriver` and `FlushBarrier` have a lifetime that coincides with that of the
+format driver generation. `FlushProbe` does too, but its cursor is opened and
+closed with each era of flush activity, which is shorter.
 
 ### Miscellaneous development notes
 

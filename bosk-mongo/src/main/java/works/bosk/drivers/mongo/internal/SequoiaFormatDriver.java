@@ -1,5 +1,6 @@
 package works.bosk.drivers.mongo.internal;
 
+import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import com.mongodb.client.model.changestream.OperationType;
@@ -50,6 +51,7 @@ final class SequoiaFormatDriver<R extends StateTreeNode> extends AbstractFormatD
 	SequoiaFormatDriver(
 		BoskInfo<R> boskInfo,
 		SessionCollection collection,
+		MongoCollection<BsonDocument> changeStreamCollection,
 		MongoDriverSettings driverSettings,
 		BsonSerializer bsonSerializer,
 		Duration flushTimeout,
@@ -61,6 +63,7 @@ final class SequoiaFormatDriver<R extends StateTreeNode> extends AbstractFormatD
 			boskInfo.context(),
 			new Formatter(boskInfo, bsonSerializer),
 			collection,
+			changeStreamCollection,
 			downstream,
 			flushTimeout,
 			epoch

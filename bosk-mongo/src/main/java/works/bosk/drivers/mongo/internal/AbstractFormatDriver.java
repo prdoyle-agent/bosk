@@ -1,5 +1,6 @@
 package works.bosk.drivers.mongo.internal;
 
+import com.mongodb.client.MongoCollection;
 import com.mongodb.client.model.changestream.ChangeStreamDocument;
 import com.mongodb.client.model.changestream.UpdateDescription;
 import com.mongodb.client.result.UpdateResult;
@@ -66,6 +67,7 @@ abstract non-sealed class AbstractFormatDriver<R extends StateTreeNode> implemen
 		BoskContext context,
 		Formatter formatter,
 		SessionCollection collection,
+		MongoCollection<BsonDocument> changeStreamCollection,
 		BoskDriver downstream,
 		Duration flushTimeout,
 		Identifier epoch
@@ -78,7 +80,7 @@ abstract non-sealed class AbstractFormatDriver<R extends StateTreeNode> implemen
 		this.flushTimeout = flushTimeout;
 		this.epoch = epoch;
 		this.barrier = new FlushBarrier();
-		this.probe = new FlushProbe(collection, this::lastStateChangeFilter, barrier);
+		this.probe = new FlushProbe(changeStreamCollection, this::lastStateChangeFilter, barrier);
 	}
 
 	@Override
@@ -432,10 +434,11 @@ abstract non-sealed class AbstractFormatDriver<R extends StateTreeNode> implemen
 		// A same-format refurbish keeps the epoch; the receiver's reload catches it.
 		collection.requireNoTransaction();
 		requireExpectedEpoch();
-		// A single absolute deadline for the whole attempt: both waits stop at the
-		// same instant, so their combined time cannot exceed flushTimeout.
+		// A single absolute deadline for the whole attempt: the probe and the
+		// barrier wait stop at the same instant, so their combined time stays
+		// within flushTimeout, apart from one driver call overshooting it.
 		long flushDeadline = System.nanoTime() + flushTimeout.toNanos();
-		probe.awaitCaughtUpTo(barrier.awaitSubmitted(flushDeadline), flushDeadline);
+		barrier.awaitSubmittedThrough(probe.target(flushDeadline), flushDeadline);
 		LOGGER.debug("| Flush downstream");
 		downstream.flush();
 	}
@@ -486,13 +489,22 @@ abstract non-sealed class AbstractFormatDriver<R extends StateTreeNode> implemen
 	/**
 	 * Selects the change events that complete a Bosk change in this format. A
 	 * flush waits for these and ignores every other event.
+	 * <p>
+	 * Called from flush threads, possibly concurrently with the receiver, so
+	 * implementations must be pure functions of immutable configuration.
 	 */
 	protected abstract Bson lastStateChangeFilter();
 
 	@Override
 	public void close() {
 		LOGGER.debug("+ close()");
-		barrier.close();
+		try {
+			probe.close();
+		} finally {
+			// Always wake the flushes that are already waiting on the barrier,
+			// even if closing the probe failed.
+			barrier.close();
+		}
 	}
 
 	protected BsonDocument initialDocument(BsonValue initialState, BsonString documentId) {

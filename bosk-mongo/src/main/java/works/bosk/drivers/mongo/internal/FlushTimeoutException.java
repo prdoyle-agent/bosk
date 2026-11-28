@@ -3,8 +3,9 @@ package works.bosk.drivers.mongo.internal;
 import works.bosk.exceptions.FlushFailureException;
 
 /**
- * A flush timed out waiting for the {@link ChangeReceiver} to submit a change
- * downstream.
+ * A flush could not establish, or wait for, a position within its budget: the
+ * {@link ChangeReceiver} did not submit a change in time, or the change stream
+ * could not be read in time.
  * <p>
  * This is a retryable condition: the driver disconnects, waits for the change stream
  * to recover, and retries the flush. If it escapes the retry loop, {@link MainDriver}

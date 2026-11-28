@@ -250,9 +250,9 @@ class EpochTest extends AbstractMongoDriverTest {
 		Duration flushTimeout = Duration.ofSeconds(1);
 		return switch (driverSettings.preferredDatabaseFormat()) {
 			case MongoDriverSettings.SequoiaFormat _ -> new SequoiaFormatDriver<>(
-				bosk, sessionCollection, driverSettings, serializer, flushTimeout, bosk.driver(), epoch);
+				bosk, sessionCollection, sessionCollection.fromPrimary(), driverSettings, serializer, flushTimeout, bosk.driver(), epoch);
 			case PandoFormat pandoFormat -> new PandoFormatDriver<>(
-				bosk, sessionCollection, driverSettings, pandoFormat, serializer, flushTimeout, bosk.driver(), epoch);
+				bosk, sessionCollection, sessionCollection.fromPrimary(), driverSettings, pandoFormat, serializer, flushTimeout, bosk.driver(), epoch);
 		};
 	}
 

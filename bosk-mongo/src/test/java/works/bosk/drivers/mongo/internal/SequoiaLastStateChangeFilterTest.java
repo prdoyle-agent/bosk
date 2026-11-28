@@ -55,7 +55,7 @@ class SequoiaLastStateChangeFilterTest extends AbstractMongoDriverTest {
 			.getCollection(driverSettings.collection(), BsonDocument.class);
 		SessionCollection sessionCollection = SessionCollection.of(collection, mongoService.client());
 		SequoiaFormatDriver<TestEntity> driver = new SequoiaFormatDriver<>(
-			bosk, sessionCollection, driverSettings, new BsonSerializer(),
+			bosk, sessionCollection, collection, driverSettings, new BsonSerializer(),
 			Duration.ofSeconds(1), bosk.driver(), epoch);
 
 		try (var cursor = collection.watch(List.of(match(driver.lastStateChangeFilter())))

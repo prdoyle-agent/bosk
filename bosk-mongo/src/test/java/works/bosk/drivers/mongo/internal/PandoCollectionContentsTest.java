@@ -103,6 +103,7 @@ class PandoCollectionContentsTest extends AbstractMongoDriverTest {
 		AbstractFormatDriver<TestEntity> driver = new PandoFormatDriver<>(
 			bosk,
 			sessionCollection,
+			sessionCollection.fromPrimary(),
 			driverSettings,
 			(PandoFormat) driverSettings.preferredDatabaseFormat(),
 			new BsonSerializer(),
