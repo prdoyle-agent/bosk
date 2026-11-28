@@ -17,5 +17,10 @@ public enum FlushMode {
 	/**
 	 * Do not flush during the run; flush once after the workers stop.
 	 */
-	END_ONLY
+	END_ONLY,
+
+	/**
+	 * Only flush; do not submit updates. Measures a flood of flushes against an idle bosk.
+	 */
+	FLUSH_ONLY
 }

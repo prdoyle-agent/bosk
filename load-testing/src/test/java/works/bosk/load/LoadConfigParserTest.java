@@ -45,6 +45,8 @@ class LoadConfigParserTest {
 		assertEquals(FlushMode.EVERY_OP, LoadConfigParser.parseFlushMode("everyOp"));
 		assertEquals(FlushMode.EVERY_N, LoadConfigParser.parseFlushMode("every_n"));
 		assertEquals(FlushMode.END_ONLY, LoadConfigParser.parseFlushMode("end"));
+		assertEquals(FlushMode.FLUSH_ONLY, LoadConfigParser.parseFlushMode("flushOnly"));
+		assertEquals(FlushMode.FLUSH_ONLY, LoadConfigParser.parseFlushMode("only"));
 	}
 
 	@Test

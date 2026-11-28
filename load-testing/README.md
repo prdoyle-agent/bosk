@@ -39,7 +39,7 @@ Options:
 | `--threads` | `P` | Worker threads |
 | `--warmup` | `10s` | Warmup duration; supports `ms`, `s`, `m`, `h` |
 | `--duration` | `30s` | Measurement duration |
-| `--flush` | `everyOp` | `everyOp`, `everyN`, or `end` |
+| `--flush` | `everyOp` | `everyOp`, `everyN`, `end`, or `flushOnly` |
 | `--flushEvery` | `100` | Flush interval for `everyN` |
 | `--valueBytes` | `16` | Length of the string values written by the workload |
 | `--hookLatency` | `0ms` | Sleep time for each hook; zero means it doesn't sleep |
