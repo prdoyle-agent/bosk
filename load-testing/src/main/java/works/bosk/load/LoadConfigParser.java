@@ -98,7 +98,8 @@ public final class LoadConfigParser {
 			case "everyop" -> FlushMode.EVERY_OP;
 			case "everyn" -> FlushMode.EVERY_N;
 			case "end", "endonly" -> FlushMode.END_ONLY;
-			default -> throw new IllegalArgumentException("Invalid flush mode \"" + value + "\"; expected everyOp, everyN, or end");
+			case "flushonly", "only" -> FlushMode.FLUSH_ONLY;
+			default -> throw new IllegalArgumentException("Invalid flush mode \"" + value + "\"; expected everyOp, everyN, end, or flushOnly");
 		};
 	}
 

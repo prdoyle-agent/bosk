@@ -242,18 +242,21 @@ public final class LoadRunner {
 			long iteration = 0;
 			while (!stop.get()) {
 				boolean record = measuring.get();
-				long operationStart = System.nanoTime();
-				try {
-					workload.submit(driver, threadIndex, iteration++);
-				} catch (RuntimeException e) {
-					recordError(errors, firstError, e);
-					continue;
+				boolean flushOnly = config.flushMode() == FlushMode.FLUSH_ONLY;
+				if (!flushOnly) {
+					long operationStart = System.nanoTime();
+					try {
+						workload.submit(driver, threadIndex, iteration++);
+					} catch (RuntimeException e) {
+						recordError(errors, firstError, e);
+						continue;
+					}
+					long operationEnd = System.nanoTime();
+					if (record) {
+						submitLatency.record(operationEnd - operationStart);
+					}
 				}
-				long operationEnd = System.nanoTime();
-				if (record) {
-					submitLatency.record(operationEnd - operationStart);
-				}
-				if (shouldFlush(config, iteration)) {
+				if (flushOnly || shouldFlush(config, iteration)) {
 					long flushStart = System.nanoTime();
 					try {
 						driver.flush();
@@ -284,7 +287,7 @@ public final class LoadRunner {
 		return switch (config.flushMode()) {
 			case EVERY_OP -> true;
 			case EVERY_N -> iteration % config.flushEvery() == 0;
-			case END_ONLY -> false;
+			case END_ONLY, FLUSH_ONLY -> false;
 		};
 	}
 
